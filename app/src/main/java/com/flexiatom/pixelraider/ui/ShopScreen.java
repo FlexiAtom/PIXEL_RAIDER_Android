@@ -55,6 +55,8 @@ public final class ShopScreen {
     private static final String L_MAXED = "已满级";
     private static final String L_EMPTY = "货架空了";
     private static final String L_READY = "立即就绪";
+    /** 「随机强化」那一档的核心位：它没有数值可画，画的是"抽哪一种"这件事（{@code CORE_CHOICE}）。 */
+    private static final String L_CHOICE = "四选一";
     /** 核心数字的单位。汉字不能进点阵通道，见 {@link #drawCore}。 */
     private static final String L_UNIT_POINTS = "点";
     private static final String L_UNIT_COUNT = "枚";
@@ -305,6 +307,9 @@ public final class ShopScreen {
                 hud.reset().chr('+').num(Math.round(v));
                 unit = L_UNIT_SHOTS;
                 break;
+            case ShopRules.CORE_CHOICE:
+                kit.baked(c, L_CHOICE, Md3.PX_LABEL, Md3.primary(), x, cy, alpha, true);
+                return;
             default:
                 kit.baked(c, L_READY, Md3.PX_LABEL, Md3.primary(), x, cy, alpha, true);
                 return;

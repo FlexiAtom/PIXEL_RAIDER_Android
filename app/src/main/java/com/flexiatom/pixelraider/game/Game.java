@@ -662,7 +662,7 @@ public final class Game implements GameThread.Host {
     /**
      * 把刚买的那一级打到现场。
      *
-     * <p>只有会改**别的容器**的卡需要这一步（血、盾、炸弹、超载）；五个乘子是 {@link #shopRun}
+     * <p>只有会改**别的容器**的卡需要这一步（血、盾、炸弹、超载、状态层）；五个乘子是 {@link #shopRun}
      * 现算的，读取点自己会看到新等级，这里不需要做任何事。
      */
     private void applyShopUpgrade(int id) {
@@ -684,6 +684,13 @@ public final class Game implements GameThread.Host {
                 break;
             case Balance.ShopCard.SURGE:
                 overload.forceReady();
+                break;
+            case Balance.ShopCard.RANDOM:
+                // 商店侧只抽**四种增益**（0..SWIFT），掉落侧抽**八种**（0..PICKUP_COUNT，含减益）：
+                // 两个抽样集是两条独立决定的产物，不是这里漏了一半（掉落侧存废仍未裁）。
+                // activate 的语义逐字是"新的顶掉旧的"，所以手上有狂热时抽到幸运是**净亏**——
+                // 他给的知情渠道就是卡面 tip 那半句（「至于买了之后顶掉，一行提示即可」）。
+                status.activate(rng.nextInt(StatusLayers.SWIFT + 1));
                 break;
             default:
                 break;

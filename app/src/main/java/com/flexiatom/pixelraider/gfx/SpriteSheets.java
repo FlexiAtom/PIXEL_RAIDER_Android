@@ -57,6 +57,7 @@ public final class SpriteSheets {
     public static final int ID_SHOP_SPEED = 22;
     public static final int ID_SHOP_HULL = 23;
     public static final int ID_SHOP_MAGNET = 24;
+    public static final int ID_SHOP_RANDOM = 25;
 
     /** 玩家机：11×11，机头朝上（朝向由实际位移旋转绘制，不在网格里画四个方向）。 */
     public static final String[] SHIP = {
@@ -293,7 +294,7 @@ public final class SpriteSheets {
 
     // ---- 商店卡图标（规格 §四 商店：三张卡各带一枚像素图标）--------------------------------
     // 形状先于颜色（§三）：火力=弹头、射速=双上箭、暴击=四角星、推力=喷口尾焰、装甲=带筋铁板、
-    // 磁吸=U 形磁铁。每张都要在 24px 里一眼认出，所以宁可粗，不画细线。
+    // 磁吸=U 形磁铁、随机=两点骰面。每张都要在 24px 里一眼认出，所以宁可粗，不画细线。
 
     /** 火力：一枚弹头朝上的子弹，弹体三段、尾翼外撇。 */
     public static final String[] SHOP_FIRE = {
@@ -374,6 +375,24 @@ public final class SpriteSheets {
     };
 
     /**
+     * 随机：一枚两点骰面。选骰子而不是选"四角星"，是因为星已经被 {@link #DROP_POWERUP} 占去表示
+     * "这是一个状态层"——四种增益本来就靠颜色分形；这张卡卖的是**抽哪一种**，形状必须说"随机"，
+     * 不能再说"状态"。两个斜角的点是 2×2 的**挖空**（透明当骰面点），在 9×9 里还认得出来，
+     * 画三点就会被缩放宽糊掉。
+     */
+    public static final String[] SHOP_RANDOM = {
+            ".0000000.",
+            "033333320",
+            "030033320",
+            "030033320",
+            "033333320",
+            "033330020",
+            "033330020",
+            "022222220",
+            ".0000000.",
+    };
+
+    /**
      * 按**玩法枚举的序号**索引的网格表：小怪读 {@code Balance.Enemy.STRAIGHT..BURSTER}、
      * Boss 读 {@code Balance.Boss.DESTROYER..FORTRESS}、掉落读 {@code Drops.CHIP..BOMB}。
      *
@@ -398,16 +417,21 @@ public final class SpriteSheets {
             ID_CHIP, ID_COIN, ID_HP, ID_SHIELD, ID_POWERUP, ID_BOMB,
     };
     /**
-     * 商店卡图标：下标对齐 {@code Balance.ShopCard.FIREPOWER..GREED}。五张一次性补给卡复用
+     * 商店卡图标：下标对齐 {@code Balance.ShopCard.FIREPOWER..RANDOM}。五张一次性补给卡复用
      * 掉落图标（HP/盾/炸弹/能量/金币），所以这里**不是**每个 id 一张新网格，而是同形状的第二次引用。
+     *
+     * <p>⚠ 这两条数组与卡表是**按下标**绑死的：加一张卡必须同时在这里尾上加一格，否则新卡会画成
+     * 第 0 张（{@code shopIconSheet} 越界退回首项），表现是"图标错了"而不是崩溃——不会有任何东西替你响。
      */
     public static final String[][] SHOP_ICON_SHEETS = {
             SHOP_FIRE, SHOP_RATE, SHOP_CRIT, SHOP_SPEED, SHOP_HULL,
             DROP_HP, DROP_SHIELD, DROP_BOMB, DROP_POWERUP, SHOP_MAGNET, DROP_COIN,
+            SHOP_RANDOM,
     };
     public static final int[] SHOP_ICON_IDS = {
             ID_SHOP_FIRE, ID_SHOP_RATE, ID_SHOP_CRIT, ID_SHOP_SPEED, ID_SHOP_HULL,
             ID_HP, ID_SHIELD, ID_BOMB, ID_POWERUP, ID_SHOP_MAGNET, ID_COIN,
+            ID_SHOP_RANDOM,
     };
 
     public static int widthOf(String[] rows) {

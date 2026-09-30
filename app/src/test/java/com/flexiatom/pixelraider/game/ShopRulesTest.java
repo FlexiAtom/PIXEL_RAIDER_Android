@@ -27,7 +27,8 @@ import java.util.Set;
 import org.junit.Test;
 
 /**
- * 升级商店的规则端（规格 §升级商店：11 张卡、每波三选一、不是纯随机）。
+ * 升级商店的规则端（规格 §升级商店：每波三选一、不是纯随机；卡表今天 12 张，规格钉的是 11 张，
+ * 第 12 张「随机强化」是 2026-10-01 按他的加成卡裁定加的——别把这张卡记成规格原文）。
  *
  * <p>期望值全部**手推**（照 {@code GrowthTreeTest} 的规矩）：这一层错了的表现是"低血时抽出三张
  * 养成卡"和"卡面写 +2% 实际 +3%"，两种都看不出所以然，只能靠断言判。
@@ -65,8 +66,8 @@ public class ShopRulesTest {
     // ---- 表本身 ---------------------------------------------------------------------------
 
     @Test
-    public void cardTableIsTheSpecifiedElevenCardsInIdOrder() {
-        assertEquals("规格钉死 11 张卡", 11, CARDS);
+    public void cardTableIsTheSpecifiedTwelveCardsInIdOrder() {
+        assertEquals("卡表钉死 12 张（11 张 ＋「随机强化」）", 12, CARDS);
         assertEquals("卡表长度必须跟 CARDS 一致，否则快照数组会短一截", CARDS, Balance.shopCards.length);
         for (int id = 0; id < CARDS; id++) {
             assertEquals("第 " + id + " 项的 id 与下标不符（id 是货架槽位→卡 id 的唯一桥梁）",
@@ -96,17 +97,24 @@ public class ShopRulesTest {
     public void firepowerPriceKeepsClimbingInsteadOfGoingUnbuyable() {
         Balance.ShopCard fire = Balance.shopCards[Balance.ShopCard.FIREPOWER];
         ShopRules.Snapshot s = snap(1, 100, 999);
-        // 30 + 12 * lv，手推前四级
-        int[] ladder = {30, 42, 54, 66};
+        // 阶梯 30 + 12·lv 再过九五折，手推前四级：30→28.5→29、42→39.9→40、54→51.3→51、66→62.7→63。
+        // 第一级那个 28.5 特意留着：它钉的是 Math.round 的"半分向上"，扣币端与卡面端若各取一半，
+        // 差的就是这一枚金币——这条断言把它钉在同一侧。
+        int[] ladder = {29, 40, 51, 63};
         for (int lv = 0; lv < ladder.length; lv++) {
             s.level[Balance.ShopCard.FIREPOWER] = lv;
             assertEquals(ladder[lv], ShopRules.nextPrice(fire, s));
         }
+        int prev = -1;
         for (int lv : new int[]{10, 11, 25, 80}) {
             s.level[Balance.ShopCard.FIREPOWER] = lv;
+            int price = ShopRules.nextPrice(fire, s);
             assertNotEquals("第 " + lv + " 级又变成买不动的哨兵了（上限已取消）",
-                    Balance.Shop.PRICE_MAXED, ShopRules.nextPrice(fire, s));
-            assertEquals(30 + 12 * lv, ShopRules.nextPrice(fire, s));
+                    Balance.Shop.PRICE_MAXED, price);
+            // 只断"还在爬"：把 30+12·lv 再乘一遍写进断言就是立了第二个价格真源，改了公式它跟着改，
+            // 什么也拦不住。阶梯的形状由上面那四个手推数钉，深度由这条单调性钉。
+            assertTrue("第 " + lv + " 级 " + price + " 不比上一级 " + prev + " 贵", price > prev);
+            prev = price;
         }
     }
 
@@ -116,9 +124,30 @@ public class ShopRulesTest {
         ShopRules.Snapshot s = snap(1, 50, 999);
         for (int lv = 0; lv < 30; lv++) {
             s.level[Balance.ShopCard.REPAIR] = lv;
-            assertEquals("一次性卡没有阶梯", 25, ShopRules.nextPrice(repair, s));
+            assertEquals("一次性卡没有阶梯（25 过九五折 = 23.75 → 24）", 24,
+                    ShopRules.nextPrice(repair, s));
             assertEquals(ShopRules.UNLIMITED, ShopRules.maxLevelOf(Balance.ShopCard.REPAIR));
         }
+    }
+
+    /**
+     * 九五折（I-3）只有 {@code nextPrice} 这一个乘点，并且**乘在满级哨兵之后**。
+     *
+     * <p>四个数全手推：{@code 55 → 52.25 → 52}、{@code 45 → 42.75 → 43}、{@code 38 → 36.1 → 36}，
+     * 加上维修那张的 {@code 25 → 23.75 → 24}。取整方向（向上/向下）在金币上是看得见的差，
+     * 所以宁可写四个手推数，也不在断言里重述公式。
+     * 装甲强化满级后必须还是哨兵：负数被乘成 −0.95 再取整"碰巧"仍是 −1，那是巧合不是保证——
+     * 这条把哨兵钉在乘子之前，将来谁把早退挪到乘法后面，它会红。
+     */
+    @Test
+    public void discountIsAppliedOnceAndNeverTouchesTheMaxedSentinel() {
+        ShopRules.Snapshot s = snap(1, 100, 999);
+        assertEquals(52, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.SALVO], s));
+        assertEquals(43, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.GREED], s));
+        assertEquals(36, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.PRECISION], s));
+        s.level[Balance.ShopCard.HULL] = ShopRules.maxLevelOf(Balance.ShopCard.HULL);
+        assertEquals("满级哨兵不许被折扣乘一遍", Balance.Shop.PRICE_MAXED,
+                ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.HULL], s));
     }
 
     // ---- 有效性：买了必须有事发生 ------------------------------------------------------------
@@ -205,6 +234,43 @@ public class ShopRulesTest {
     }
 
     /**
+     * 「随机强化」的 prio 形状：<b>平值、残血整条让位</b>（探针⑯ 定案，2026-10-01）。
+     *
+     * <p>三条读数决定这三条断言（波 1..20 × 4000 种子 × 四档现状，通用侧六张卡的池子；
+     * 归档见状态根 {@code reference/evidence/launchunit/out16.txt}）：
+     * <ul>
+     *   <li>通用池满状态那档的<b>第三名 prio 从波 3 起恒为 0.30</b>、扣掉抖动后门槛 0.22
+     *       ⇒ 平值 0.40 的露脸率 94.8%。低于 0.30 就等于这张卡买不到，所以 0.30 是地板而非口味。</li>
+     *   <li>给它<b>波次项</b>能换到"半血也 100% 上架"（候选 4：99.7%），但那等于把"十二秒的
+     *       消耗品越到后期越该买"这句没根据的话写进分数里——这张卡的边际价值不随波次变，
+     *       与贪婪卡那条"越早买越划算"正好相反的方向。所以断言取"平"。</li>
+     *   <li>残血<b>有弹</b>那一档（hp 25 / bombs 1）平值 0.40 仍有 16.3% 的货架混进三格
+     *       （波 1..6 各 30~38%），而那三格该留给维修/护盾/弹药 ⇒ panic 项钳到 0 后实测 0.0%。</li>
+     * </ul>
+     *
+     * <p>⚠ 这些读数只在**通用侧六张卡**的池子里成立。分区落地前回合店从十二张全表里抽，全表门槛
+     * 从波 1 的 0.340 爬到波 20 的 0.700，任何平值都进不了架（0.26 与 0.40 实测都是 0.0%）——
+     * 那条错账曾让我以为这张卡必须随波次爬。下面第一条"满血进不了架"的断言因此**不写**，
+     * 它测的是池子构成而不是这张卡，归 commit B 的分区用例去钉。
+     */
+    @Test
+    public void randomCardIsAFlatFillerThatYieldsWhenDying() {
+        assertEquals("消耗品的分数不随波次变：波 2 与波 18 同一个数",
+                ShopRules.prio(Balance.ShopCard.RANDOM, snap(2, 100, 999)),
+                ShopRules.prio(Balance.ShopCard.RANDOM, snap(18, 100, 999)), 0f);
+        assertTrue("低于通用池的第三名地板 0.30，这张卡就上不了架（探针⑯ cut line）",
+                ShopRules.prio(Balance.ShopCard.RANDOM, snap(10, 100, 999)) > 0.30f);
+        ShopRules.Snapshot dying = snap(10, 25, 999);
+        dying.bombs = 1;                       // 有翻盘手牌的残血局——平值正是从这一档漏进三格的
+        assertEquals("残血整条让位：那三格是维修/护盾/弹药的，不该是十二秒的运气",
+                0f, ShopRules.prio(Balance.ShopCard.RANDOM, dying), 0f);
+        for (long seed = 0; seed < 60; seed++) {
+            assertFalse("残血时这张卡不许出现在货架上（seed " + seed + "）",
+                    has(offer(dying, seed), Balance.ShopCard.RANDOM));
+        }
+    }
+
+    /**
      * 被打掉六成血时，速度卡必须**每一波都摆得上架**。
      *
      * <p>归属与日期在 2026-09-27 逐子句重核过（本仓注释日期 = 本地日；transcript 戳是 UTC，
@@ -226,8 +292,8 @@ public class ShopRulesTest {
             assertTrue("掉了六成血却没有速度卡（seed " + seed + "）",
                     has(offer(s, seed), Balance.ShopCard.THRUSTS));
         }
-        assertEquals("速度卡降到 22 币起卖，第 1 波的钱包就够摸到一级",
-                22, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.THRUSTS], snap(1, 100, 0)));
+        assertEquals("速度卡 22 币起卖、过九五折实付 21，第 1 波的钱包就够摸到一级",
+                21, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.THRUSTS], snap(1, 100, 0)));
     }
 
     @Test
@@ -292,11 +358,11 @@ public class ShopRulesTest {
         float jitter = Balance.shop.prioJitter;
         try {
             Balance.shop.prioJitter = 0f;
-            // 25 币：火力 30 / 扳机 34 / 贪婪 45 都买不起，三者恰好是 prio 前三。
+            // 25 币：火力 29 / 扳机 32 / 贪婪 43（都过了九五折）都买不起，三者恰好是 prio 前三。
             ShopRules.Snapshot s = snap(4, 99, 25);
             s.bombs = 1;                                // 压住弹药卡的 0.55，别让它挤进前三
             s.level[Balance.ShopCard.THRUSTS] = ShopRules.maxLevelOf(Balance.ShopCard.THRUSTS);
-            // 速度卡降到 22 币之后，买得起的"前三"就不止一个了——把它顶成满级掉出货架，
+            // 速度卡折后 21 币，本就买得起——把它顶成满级掉出货架，
             // 这个"前三全买不起、只能靠保底"的局才还成立。
             int[] ids = offer(s, 1);
             assertEquals(Balance.Shop.OFFER, ids.length);
@@ -322,9 +388,12 @@ public class ShopRulesTest {
 
     @Test
     public void purchasableIsTheOneJudgeBothEndsRead() {
-        ShopRules.Snapshot s = snap(4, 100, 30);
+        // 边界跟着折扣走：火力卡原价 30，过九五折 = 28.5 → 29 ⇒ 29 币点得动、28 币点不动。
+        // 这对数字同时钉住两件事：扣币端与面板端读的是同一个 nextPrice（否则边界会分裂成两个），
+        // 以及取整方向是"半分向上"（向下取整的话 28 就该点得动了）。
+        ShopRules.Snapshot s = snap(4, 100, 29);
         assertTrue(ShopRules.purchasable(Balance.shopCards[Balance.ShopCard.FIREPOWER], s));
-        s.coins = 29;
+        s.coins = 28;
         assertFalse(ShopRules.purchasable(Balance.shopCards[Balance.ShopCard.FIREPOWER], s));
         s.coins = 999;
         s.hp = 100;
@@ -415,6 +484,10 @@ public class ShopRulesTest {
         assertEquals("磁吸 +30% 有小数档时显示一位小数", 30f,
                 ShopRules.coreValue(Balance.ShopCard.MAGNET), 1e-4f);
         assertEquals(0, ShopRules.coreDecimals(Balance.ShopCard.MAGNET));
+        // 「随机强化」**特意不落在 default 那一路**：default 画「立即就绪」，那是给冷却制卡（超载）
+        // 说的话，画在一张"立即给你一种增益"的卡上就是上屏的假话。这条是 JVM 侧唯一还能拦住
+        // 它的地方——drawCore 那个 switch 走 Canvas，测试碰不到（见 ShopRules 里 CORE_CHOICE 的注释）。
+        assertEquals(ShopRules.CORE_CHOICE, ShopRules.coreKind(Balance.ShopCard.RANDOM));
     }
 
     /**
@@ -460,7 +533,7 @@ public class ShopRulesTest {
             assertTrue(ShopRules.showsLevel(id));
         }
         for (int id : new int[] {Balance.ShopCard.REPAIR, Balance.ShopCard.SHIELD,
-                Balance.ShopCard.SALVO, Balance.ShopCard.SURGE}) {
+                Balance.ShopCard.SALVO, Balance.ShopCard.SURGE, Balance.ShopCard.RANDOM}) {
             assertEquals("一次性卡同样是 UNLIMITED 哨兵", ShopRules.UNLIMITED,
                     ShopRules.maxLevelOf(id));
             assertFalse("但它没有累计收益，角标不许画", ShopRules.showsLevel(id));

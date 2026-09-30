@@ -21,7 +21,8 @@ import com.flexiatom.pixelraider.core.RectI;
 import com.flexiatom.pixelraider.plat.Screen;
 
 /**
- * 升级商店面板的全部**可测数字**（规格 §升级商店：11 张卡、每波三选一、图标+名字+核心数字+tip）。
+ * 升级商店面板的全部**可测数字**（规格 §升级商店：每波三选一、图标+名字+核心数字+tip；
+ * 卡的总数不在这里写死，读 {@code Balance.Shop.CARDS}）。
  *
  * <p>与暂停面板的分工：那块是"激战里拉开的数据板"，八张卡要在 320~560 的每种逻辑高上分账，
  * 所以它铺满整屏；这块只有三张卡，卡的**内容高度是固定的**（图标行 + 数字行 + 说明行），

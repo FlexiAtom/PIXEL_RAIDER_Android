@@ -46,9 +46,13 @@ public final class ShopRules {
      * {@code ShopScreenTest} 只钉得住静态动作码（{@code ACTION_*} 区间），
      * {@code drawCore} 走的是 Canvas 绘制路径，JVM 侧**零覆盖** ⇒ 判据要下沉到本类
      * （见 {@link #coreKind}），面板侧只剩"真机看一眼"。
+     *
+     * <p>{@link #CORE_CHOICE} 是「随机强化」（2026-10-01）加的第六档：它没有数值可显示，
+     * 卡面要说的是"四样里抽一样"这件事本身。**特意不走 default**——default 那一路画
+     * 「立即就绪」，那是给冷却制卡片用的话，画在一张"立即给你一种增益"的卡上是一句上屏的假话。
      */
     public static final int CORE_PERCENT = 0, CORE_POINTS = 1, CORE_COUNT = 2, CORE_INSTANT = 3,
-            CORE_SHOTS = 4;
+            CORE_SHOTS = 4, CORE_CHOICE = 5;
 
     /**
      * 开架那一刻的现状。由 Game 填（一次一填，不是每帧），本类只读。
@@ -95,6 +99,7 @@ public final class ShopRules {
             case Balance.ShopCard.SHIELD: return Balance.shield.fromUpgrade;
             case Balance.ShopCard.SALVO: return k.salvoBombs;
             case Balance.ShopCard.SURGE: return 0f;      // 没有量，只有"立即"
+            case Balance.ShopCard.RANDOM: return 0f;     // 同上：卖的是"抽一种"，不是某个数
             case Balance.ShopCard.MAGNET: return k.magnetPerLevel;
             case Balance.ShopCard.GREED: return k.coinPerLevel;
             default: return 0f;
@@ -128,7 +133,7 @@ public final class ShopRules {
      *
      * <p>这条判据原本是从 {@link #maxLevelOf} 那个哨兵推出来的，取消满级之后推不出来了：
      * 火力与扳机现在也返回 {@link #UNLIMITED}，照旧判法它们会连角标一起没了（玩家看不出自己
-     * 这局压了几级），而反过来把哨兵判反一次，四张一次性卡就会印出「Lv 3」——第三支维修针
+     * 这局压了几级），而反过来把哨兵判反一次，那几张一次性卡就会印出「Lv 3」——第三支维修针
      * 并不比第一支更值钱，那是一句上屏的假话。
      */
     public static boolean showsLevel(int cardId) {
@@ -137,6 +142,7 @@ public final class ShopRules {
             case Balance.ShopCard.SHIELD:
             case Balance.ShopCard.SALVO:
             case Balance.ShopCard.SURGE:
+            case Balance.ShopCard.RANDOM:
                 return false;
             default:
                 return true;
@@ -149,7 +155,13 @@ public final class ShopRules {
         int lv = s.levelOf(card.id);
         int max = maxLevelOf(card.id);
         if (max != UNLIMITED && lv >= max) return Balance.Shop.PRICE_MAXED;
-        return card.priceBase + card.priceStep * Math.max(0, lv);
+        int raw = card.priceBase + card.priceStep * Math.max(0, lv);
+        // 九五折（I-3）只有这一个乘点：卡面显示的价与扣币端算的价必须出自同一个函数，各乘一份
+        // 就会长成"写着 28、扣 30"——本仓规格点名的"显示与结算不一致"那一类。
+        // 上面那两条 PRICE_MAXED 早退在乘子之前 ⇒ 哨兵原样透出，不靠"-1×0.95 取整还是 -1"这种巧合。
+        // ⚠ 他裁的是"**回合结束那个**商店打九五折"（暂停页那家全价）。今天只有回合这一个入口，
+        // 所以先无条件乘；暂停入口落地时必须在这里引入入口判据，把 1f 留给它，别让折扣跟着过去。
+        return Math.round(raw * Balance.shop.waveDiscount);
     }
 
     // ---- 过滤与优先级 ---------------------------------------------------------------------
@@ -226,6 +238,28 @@ public final class ShopRules {
                 return s.bombs <= 0 ? 0.55f : 0.30f;
             case Balance.ShopCard.SURGE:
                 return 0.42f;
+            case Balance.ShopCard.RANDOM:
+                // 平值一张，残血整条让位。0.40 这个数是我的——他没给过任何 prio 数值
+                // （归属三层见上面 THRUSTS 那条 case）。
+                //
+                // 为什么是平值：这张卡卖的是**十二秒的消耗品**，不是投资。长线养成卡的波次项
+                // 编码的是"越早买越划算"，临时 buff 没有这件事——给它波次项只是为了跟住货架门槛，
+                // 把"后期更该买"这句假话写进分数里。
+                //
+                // 为什么 0.40 就够（探针⑯，波 1..20 × 4000 种子 × 四档现状）：分区之后回合店只从
+                // 六张通用卡里抽，满状态那档的**第三名 prio 恒在 0.30**（波 3 起）、扣掉抖动后门槛
+                // 0.22 ⇒ 0.40 的露脸率 94.8%，剩下的 5% 是抖动在换 SURGE/HULL/SALVO 的位。
+                // ⚠ 这条读数**推翻了本 case 先前那版注释的理由**（"刻意压在 REPAIR 地板 0.30 之下、
+                // 靠 prioJitter 0.08 才翻得上架"）：那是拿**十二张全表**想的，全表门槛从波 1 的 0.340
+                // 一路爬到波 20 的 0.700，任何平值都进不了架（0.26 与 0.40 实测都是 0.0%）。
+                // 这张卡的家在通用池，不在养成卡霸榜的全表里——在错的池子里量出来的"上不了架"
+                // 当时差点把这张卡改成随波次爬的假形状。
+                //
+                // panic 项买的是另一条实测：残血**有弹**那一档（hp 25、bombs 1），平值 0.40 仍有
+                // 16.3% 的货架挤进三格（波 1..6 各 30~38%）——那三格该是维修/护盾/弹药的。
+                // 钳到 0 之后 0.0%。残血无弹本来就被 SALVO 的 0.55 挡在外面（平值也只 0.1%），
+                // 所以这条钳只在"有翻盘手牌"的残血局里真正起作用。
+                return 0.40f - panic * 0.40f;
             case Balance.ShopCard.FIREPOWER:
                 return 0.35f + waveTerm * 0.50f;
             case Balance.ShopCard.TRIGGER:
@@ -273,7 +307,7 @@ public final class ShopRules {
             score[n] = prio(id, s) + (rng == null ? 0f : rng.range(-jitter, jitter));
             n++;
         }
-        // 插排：11 个元素，且大部分时候顺序已经接近对（同一局内 prio 变化是渐进的）。
+        // 插排：全表才十几张卡，且大部分时候顺序已经接近对（同一局内 prio 变化是渐进的）。
         for (int i = 1; i < n; i++) {
             int id = order[i];
             float sc = score[i];
@@ -370,6 +404,8 @@ public final class ShopRules {
                 return CORE_POINTS;
             case Balance.ShopCard.SALVO:
                 return CORE_COUNT;
+            case Balance.ShopCard.RANDOM:
+                return CORE_CHOICE;                // 没有数，只有"四选一"这件事
             default:
                 return CORE_INSTANT;
         }

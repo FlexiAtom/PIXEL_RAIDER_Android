@@ -663,16 +663,29 @@ public final class Balance {
         public int bombPerLevel = 1;
     }
 
-    // ---- 升级商店（规格 §升级商店：11 张卡，每波三选一）------------------------------------
+    // ---- 升级商店（规格 §升级商店：每波三选一；卡数见 Shop.CARDS）---------------------------
 
     /**
      * 商店的全局档位。卡面数字全部从这里派生（{@code ShopRules.perLevelOf → coreValue}），
-     * 所以调完平衡不必再去 11 处文案里逐个改——那正是"显示 +2%、实际 +3%"的来源。
+     * 所以调完平衡不必再去每张卡的文案里逐个改——那正是"显示 +2%、实际 +3%"的来源。
+     * （不写"11 处"这种总数：它会被加一张卡自己改掉，写了就是给自己造一条会过期的读数。）
      */
     public static final class Shop {
-        /** [规格] 11 张卡、每波三选一。 */
-        public static final int CARDS = 11;
+        /** [规格] 每波三选一；12 张是加了「随机强化」之后的张数（原来钉的是 11 张）。 */
+        public static final int CARDS = 12;
         public static final int OFFER = 3;
+        /**
+         * 回合结束那个商店的价格乘子（I-3）。
+         *
+         * <p>第一手 = 他手写的 {@code 关于成长树.txt}（2026-09-25 转入池）逐字「目前这个回合结束的打九五折」，
+         * 该载体已按他 2026-10-01 的裁定删除（「"关于成长树.txt"作废，删除即可（以Athena管理的文档为准）」），
+         * 逐字原文存在 {@code pool/growth-tree-schools-pause-shop.md} 的「原文逐字」一节。
+         *
+         * <p>⚠ 这个数只在 {@code ShopRules.nextPrice} 里乘一次：卡面显示的价格与实际扣的金币必须
+         * 来自同一个函数，各乘一份就会分裂成本仓规格点名的"显示与结算不一致"。
+         * <b>0.95 是他给的数，不是我的手感</b>；暂停入口的乘子恒为 1（全价），所以没有第二个字段。
+         */
+        public float waveDiscount = 0.95f;
         /**
          * 「这张卡没有等级上限」的哨兵，两种来源共用：一次性补给卡（买多少次都按固定量），
          * 与 2026-09-26 起取消了满级的火力 / 扳机两张养成卡。
@@ -761,7 +774,7 @@ public final class Balance {
      */
     public static final class ShopCard {
         public static final int FIREPOWER = 0, TRIGGER = 1, PRECISION = 2, THRUSTS = 3, HULL = 4,
-                REPAIR = 5, SHIELD = 6, SALVO = 7, SURGE = 8, MAGNET = 9, GREED = 10;
+                REPAIR = 5, SHIELD = 6, SALVO = 7, SURGE = 8, MAGNET = 9, GREED = 10, RANDOM = 11;
 
         public final int id;
         public final String name;
@@ -868,6 +881,18 @@ public final class Balance {
                         "金币收益提升",
                         "越早买越划算：后面每一波掉的金币都按这个倍率算。",
                         com.flexiatom.pixelraider.gfx.SpriteSheets.ID_COIN, 45, 20),
+                new ShopCard(RANDOM, "随机强化",
+                        "十二秒随机一种，会顶掉当前",
+                        "随机给一种增益，持续十二秒；已经有状态时被新的顶掉，不做叠加。",
+                        // 「一张卡、四种增益里随机一种、玩家自主购买」是他的裁定（2026-09-30 两条逐字
+                        // 「emm，应该随机从增益中挑一个出现，玩家自己决定要不要」「所以应该是4种随机一种」，
+                        // 以及「至于买了之后顶掉，一行提示即可」——tip 里那半句"会顶掉当前"就是这一行提示）。
+                        // 措辞与 30 / priceStep=0 全是我的：他对这张卡只裁到"随机一种增益、自主购买"，
+                        // 没给过价。定价判据见池件 §8.3：随机品按期望最差那一档定，与确定性的
+                        // SURGE 40 / SALVO 55 拉开。
+                        // ⚠ 抽样集与掉落侧**不同**：商店只抽 0..SWIFT 四种增益，掉落池是 0..PICKUP_COUNT
+                        // 八种（含减益）。那是两条独立决定的产物，不是这里漏了一半（掉落侧存废仍未裁）。
+                        com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_RANDOM, 30, 0),
             };
         }
     }
