@@ -30,6 +30,11 @@ import org.junit.Test;
  * 升级商店的规则端（规格 §升级商店：每波三选一、不是纯随机；卡表今天 12 张，规格钉的是 11 张，
  * 第 12 张「随机强化」是 2026-10-01 按他的加成卡裁定加的——别把这张卡记成规格原文）。
  *
+ * <p>2026-10-01 双入口分区（commit B1）之后，这块板子测的是<b>两家店</b>：{@code ENTRY_WAVE}
+ * 那一家仍按"三选一 + prio"抽样，{@code ENTRY_PAUSE} 那一家把非通用侧整条摆出来、不抽样也不打折。
+ * 规格那句"每波三选一"没有作废，它现在只描述回合那一家；因此下面每个用例都要**自己说清在哪
+ * 个入口测**——不写 entry 的用例走的是 {@code Snapshot.entry} 的默认值（回合店）。
+ *
  * <p>期望值全部**手推**（照 {@code GrowthTreeTest} 的规矩）：这一层错了的表现是"低血时抽出三张
  * 养成卡"和"卡面写 +2% 实际 +3%"，两种都看不出所以然，只能靠断言判。
  */
@@ -49,13 +54,19 @@ public class ShopRulesTest {
     }
 
     /** {@link #offer} 的暂存：selectOffer 只往调用方给的数组里写，测试就不必每次 new。 */
-    private static final int[] shelfInto = new int[Balance.Shop.OFFER];
+    private static final int[] shelfInto = new int[CARDS];
 
     private static int[] offer(ShopRules.Snapshot s, long seed) {
         int n = ShopRules.selectOffer(s, new Rng(seed), new float[CARDS], new int[CARDS], shelfInto);
         int[] out = new int[n];
         System.arraycopy(shelfInto, 0, out, 0, n);
         return out;
+    }
+
+    /** 暂停店那条货架：就地把这个快照换成暂停入口再开架（不抽样，所以没有种子）。 */
+    private static int[] shelf(ShopRules.Snapshot s) {
+        s.entry = ShopRules.ENTRY_PAUSE;
+        return offer(s, 0L);
     }
 
     private static boolean has(int[] ids, int cardId) {
@@ -92,15 +103,17 @@ public class ShopRulesTest {
      * <p>2026-09-26 取消满级之后，这张卡唯一买不动的原因就是"下一级太贵"。这条断的是取消之后
      * 剩下的那道闸门**仍然在算**（{@code priceBase + priceStep·lv}），而且算到远超原上限的等级
      * 也不会突然变成点不动的哨兵——那会让"取消上限"只改了一半：等级能买，价格却装死。
+     *
+     * <p>入口改成暂停店（分区之后这张卡只在那儿卖），所以四个手推数是裸阶梯 30/42/54/66。
+     * 回合店那一路的取整方向不在这里测了——它由 {@link #discountIsAppliedOnceAndNeverTouchesTheMaxedSentinel}
+     * 里护盾卡那枚 28.5 钉住。
      */
     @Test
     public void firepowerPriceKeepsClimbingInsteadOfGoingUnbuyable() {
         Balance.ShopCard fire = Balance.shopCards[Balance.ShopCard.FIREPOWER];
         ShopRules.Snapshot s = snap(1, 100, 999);
-        // 阶梯 30 + 12·lv 再过九五折，手推前四级：30→28.5→29、42→39.9→40、54→51.3→51、66→62.7→63。
-        // 第一级那个 28.5 特意留着：它钉的是 Math.round 的"半分向上"，扣币端与卡面端若各取一半，
-        // 差的就是这一枚金币——这条断言把它钉在同一侧。
-        int[] ladder = {29, 40, 51, 63};
+        s.entry = ShopRules.ENTRY_PAUSE;
+        int[] ladder = {30, 42, 54, 66};
         for (int lv = 0; lv < ladder.length; lv++) {
             s.level[Balance.ShopCard.FIREPOWER] = lv;
             assertEquals(ladder[lv], ShopRules.nextPrice(fire, s));
@@ -138,16 +151,178 @@ public class ShopRulesTest {
      * 所以宁可写四个手推数，也不在断言里重述公式。
      * 装甲强化满级后必须还是哨兵：负数被乘成 −0.95 再取整"碰巧"仍是 −1，那是巧合不是保证——
      * 这条把哨兵钉在乘子之前，将来谁把早退挪到乘法后面，它会红。
+     *
+     * <p>上面三个乘过的数是 −.25 / +.75 / +.1，它们只钉得住"四舍五入"这一半；
+     * 护盾卡那条 {@code 30 → 28.5 → 29} 才是**恰好半分**的唯一证据（向下取整会给出 28）。
+     * 它以前挂在火力卡那格，分区之后火力卡归暂停店、走乘子 1，这枚钉子必须搬到一张真的还在
+     * 回合货架上的卡——<b>用哪张卡测，取决于哪家店真的卖它</b>，否则测的是一条没有读取点的路径。
      */
     @Test
     public void discountIsAppliedOnceAndNeverTouchesTheMaxedSentinel() {
-        ShopRules.Snapshot s = snap(1, 100, 999);
+        ShopRules.Snapshot s = snap(1, 100, 999);   // entry 默认 ENTRY_WAVE ⇒ 这里读到的是九五折那一路
         assertEquals(52, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.SALVO], s));
         assertEquals(43, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.GREED], s));
         assertEquals(36, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.PRECISION], s));
+        assertEquals("28.5 这枚半分向上取整 = 29（向下会给 28）", 29,
+                ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.SHIELD], s));
         s.level[Balance.ShopCard.HULL] = ShopRules.maxLevelOf(Balance.ShopCard.HULL);
         assertEquals("满级哨兵不许被折扣乘一遍", Balance.Shop.PRICE_MAXED,
                 ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.HULL], s));
+    }
+
+    // ---- 双入口分区 -------------------------------------------------------------------------
+
+    /**
+     * 分区的**不重不漏**。他 2026-09-30 的逐字提案是「我提议，波次结束的商店仅提供弹药补给、
+     * 护盾、血量、临时加成之类的，而其他非补给的卡在暂停页做个商店放里面」，这条把那句话
+     * 翻译成两个数：通用侧 6 张、非通用侧 6 张，并且**每张卡点名落在哪一家**。
+     *
+     * <p>为什么点名而不是只数张数：两侧由同一个谓词互补切出来，所以"把装甲卡换成火力卡"这种
+     * 一整一出的错登记**两侧张数照旧各是 6**，只有点名能看见它搬了家。簇 II 还要往卡表里加四张
+     * 构筑卡，那正是最容易只加卡不加 case、或顺手把新卡也归进通用侧的时候。
+     *
+     * <p>非通用侧的 6 是从 {@link ShopRules#listShelf} 数出来的（生产函数），不是照着 switch 再点一遍。
+     */
+    @Test
+    public void partitionCoversEveryCardExactlyOnce() {
+        int wave = 0;
+        for (int id = 0; id < CARDS; id++) if (ShopRules.isWaveCard(id)) wave++;
+        assertEquals("通用侧（回合店）今天六张", 6, wave);
+        assertEquals("非通用侧（暂停店）六张——这个 6 是从 listShelf 数出来的",
+                6, shelf(snap(1, 100, 999)).length);
+        assertEquals("两侧合起来正好覆盖整张卡表。今天'不漏'是由 default 自动保证的（一个谓词、"
+                + "两侧互补）；这条钉的是将来两侧拆成两个独立判据时那张两头都不认的卡",
+                CARDS, wave + 6);
+        for (int id : new int[]{Balance.ShopCard.REPAIR, Balance.ShopCard.SHIELD,
+                Balance.ShopCard.SALVO, Balance.ShopCard.SURGE, Balance.ShopCard.HULL,
+                Balance.ShopCard.RANDOM}) {
+            assertTrue("这张补给/临时加成卡不在回合店里：" + Balance.shopCards[id].name,
+                    ShopRules.isWaveCard(id));
+        }
+        for (int id : new int[]{Balance.ShopCard.FIREPOWER, Balance.ShopCard.TRIGGER,
+                Balance.ShopCard.PRECISION, Balance.ShopCard.THRUSTS, Balance.ShopCard.MAGNET,
+                Balance.ShopCard.GREED}) {
+            assertFalse("这张非补给卡跑到回合店来了：" + Balance.shopCards[id].name,
+                    ShopRules.isWaveCard(id));
+        }
+    }
+
+    /**
+     * 回合货架上**永远不该出现构筑卡**——三种血量档 × 60 个种子都不许出现。
+     *
+     * <p>这条与 {@link #healthyLateWaveSellsGeneralsNotBuildups} 是同一件事的两面：那条说
+     * "最该推的卡换了人"，这条说"旧人一次都没回来过"。跑三档血量是因为通用侧哪几张有效随现状变
+     * （满血时维修被 {@code isValid} 滤掉、残血时六张全在争），三档各换一种争抢格局——
+     * 万一过滤哪天只写在某一条路径上，只测一档会漏。
+     */
+    @Test
+    public void waveShelfNeverCarriesBuildCards() {
+        int[] hp = {100, 55, 20};
+        for (int h : hp) {
+            ShopRules.Snapshot s = snap(8, h, 999);
+            s.maxShield = 3;
+            s.shield = 1;
+            s.bombs = 1;
+            for (long seed = 0; seed < 60; seed++) {
+                for (int id : offer(s, seed)) {
+                    assertTrue("回合店摆出了构筑卡（hp " + h + "、seed " + seed + "）："
+                            + Balance.shopCards[id].name, ShopRules.isWaveCard(id));
+                }
+            }
+        }
+    }
+
+    /**
+     * 暂停店那条货架：<b>整条非通用侧、按 id 稳定、不打折、不抽样</b>。
+     *
+     * <p>四条各挡一种错法：
+     * <ul>
+     *   <li>整条 id 序列 {@code [0, 1, 2, 3, 9, 10]}：张数与构成一次钉死，挡住"暂停店也走三选一"
+     *       （那等于把抽样搬进面板，他这句话要的是常驻），也挡住 default 那一路的静默漏登记。</li>
+     *   <li>换一个大种子开出同一条货架：证明这一侧真的不读随机数。</li>
+     *   <li>按 id 而不是按余额排（同一条断言）：货位一旦随金币漂移，玩家下次拉开面板得重新找
+     *       那张卡。</li>
+     *   <li>六张全价（30/34/38/22/32/45，手推自 {@code Balance.shopCards} 的 priceBase）：九五折挂在
+     *       "回合结束那个商店"这句话上，覆盖到这家就变成"同一个等级在两家店卖两个价"，
+     *       而这两家店在同一局里同时可达。</li>
+     * </ul>
+     */
+    @Test
+    public void pauseShelfIsTheWholeBuildSideAtFullPrice() {
+        ShopRules.Snapshot s = snap(8, 100, 999);
+        int[] ids = shelf(s);
+        assertEquals("构筑卡按 id 稳定排列（4..8 与 11 都是通用侧，所以被跳开）",
+                "[0, 1, 2, 3, 9, 10]", java.util.Arrays.toString(ids));
+        ShopRules.Snapshot again = snap(8, 100, 999);
+        again.entry = ShopRules.ENTRY_PAUSE;
+        assertTrue("暂停货架随种子漂（它不该读随机数）",
+                java.util.Arrays.equals(ids, offer(again, 987654L)));
+        int[] full = {30, 34, 38, 22, 32, 45};
+        for (int i = 0; i < ids.length; i++) {
+            ShopRules.Snapshot one = snap(8, 100, 999);
+            one.entry = ShopRules.ENTRY_PAUSE;
+            assertEquals(Balance.shopCards[ids[i]].name + " 在暂停店被打了折",
+                    full[i], ShopRules.nextPrice(Balance.shopCards[ids[i]], one));
+        }
+    }
+
+    /** 满级的构筑卡从暂停货架上掉下去，而不是摆在那儿点不动（与通用侧同一个 {@code isValid} 闸门）。 */
+    @Test
+    public void pauseShelfDropsMaxedCards() {
+        ShopRules.Snapshot s = snap(8, 100, 999);
+        s.level[Balance.ShopCard.PRECISION] = ShopRules.maxLevelOf(Balance.ShopCard.PRECISION);
+        int[] ids = shelf(s);
+        assertEquals(5, ids.length);
+        assertFalse("暴击卡满级了还挂在暂停店", has(ids, Balance.ShopCard.PRECISION));
+        assertTrue("只该摘掉满级那一张，其余五张都得在", has(ids, Balance.ShopCard.GREED));
+    }
+
+    /**
+     * 同一张卡、同一份快照，只换 {@code entry} ⇒ 价格差一个乘子。
+     *
+     * <p>这条是 {@link ShopRules#discountFor} 的正面断言，也是"乘子由入口派生、不由调用方派生"
+     * 那个形状的证据：如果 {@code nextPrice} 是靠三个调用点各传一个参数实现的，这里就得写两次
+     * 不同的调用；现在两次调用只差<b>快照里的一个字段</b>。手推：{@code 30 → 28.5 → 29} 与
+     * {@code 30 → 30}。
+     */
+    @Test
+    public void entryDecidesThePriceMultiplier() {
+        ShopRules.Snapshot s = snap(1, 100, 999);
+        Balance.ShopCard fire = Balance.shopCards[Balance.ShopCard.FIREPOWER];
+        s.entry = ShopRules.ENTRY_WAVE;
+        assertEquals(29, ShopRules.nextPrice(fire, s));
+        s.entry = ShopRules.ENTRY_PAUSE;
+        assertEquals(30, ShopRules.nextPrice(fire, s));
+        assertEquals(1f, ShopRules.discountFor(ShopRules.ENTRY_PAUSE), 0f);
+        assertEquals(Balance.shop.waveDiscount, ShopRules.discountFor(ShopRules.ENTRY_WAVE), 0f);
+    }
+
+    /**
+     * 分区是「随机强化」的**生效前提**（commit A 收口时登记的验收项）。
+     *
+     * <p>全表时代它在 12 张里排 0.40，而第 1 波的第三名门槛已经有 0.340、第 20 波爬到 0.700
+     * ⇒ 探针实测露脸率 0.0%，等于这张卡买了个不存在的名额。分区之后同一条平值落在通用池里，
+     * 本轮**现测**（满血、无盾上限、手里没弹，60 个连续种子）：波 2 = 58、波 5 = 50、波 10 = 30、
+     * 波 14 = 23、波 20 = 22。露脸率随波次**下降**是平值的必然后果——装甲卡带波次项
+     * （0.25 + 0.35·waveTerm，第 10 波已经 0.425）会一路压过这张不动的 0.40，所以它从"早期几乎必上"
+     * 变成"后期约三分之一"。这不是 bug，但它意味着 commit A 那句"平值就够"只在早中波成立。
+     *
+     * <p>⚠ 别把上面这串数与 {@code ShopRules.prio} 里那条"通用池满状态档露脸率 94.8%"当成同一档：
+     * 归档（状态根 {@code reference/evidence/launchunit/out16.txt} 第 2 行）写着那一档的现状是
+     * **盾 3/3、弹 1**，而这里这份快照是 **无盾上限、手里没弹**。差别在弹药卡——有弹时它只排 0.30，
+     * 无弹时它是 0.55，那 0.55 在这里占掉一格 ⇒ 门槛抬高、这张卡的 0.40 从"94.8%"掉到"五成"。
+     * 两条读数各自只在自己那一档成立，不构成矛盾。下限取 10 而不是"非零"：分区没落地时这里实测是 0，
+     * 池子重新长回去时会掉到 10 以下。
+     */
+    @Test
+    public void randomCardReachesTheWaveShelfOnceThePoolIsGeneralOnly() {
+        ShopRules.Snapshot s = snap(10, 100, 999);
+        int onShelf = 0;
+        for (long seed = 0; seed < 60; seed++) {
+            if (has(offer(s, seed), Balance.ShopCard.RANDOM)) onShelf++;
+        }
+        assertTrue("满血第 10 波时「随机强化」60 次里只上架 " + onShelf + " 次：分区之后它仍然买不到",
+                onShelf >= 10);
     }
 
     // ---- 有效性：买了必须有事发生 ------------------------------------------------------------
@@ -172,26 +347,29 @@ public class ShopRulesTest {
     /**
      * 上限仍然生效的那张卡，满级后必须掉出货架。
      *
-     * <p>宿主从火力换成暴击：2026-09-26 取消满级之后火力永远有效，这条用例的过滤分支就不再被它
-     * 走到了。挑宿主的标准是<b>prio 真能挤进前三</b>——第 20 波满血时暴击卡 0.78，仅次于火力 0.85
-     * 与扳机 0.82，抖动 ±0.08 只是偶尔把它挤到第四（后面那五个对手全都要翻过 0.11 以上的差距）。
-     * 于是先数"没满级时上架了几次"，再数"满级后上架了几次"：前者非零、后者为零，这条用例才真的
-     * 在测过滤，而不是测一张本来就排不进前三的卡。
+     * <p>宿主的历史：先是火力，2026-09-26 取消满级后换成暴击（它当时靠 prio 挤得进前三），
+     * 2026-10-01 分区后再换成**装甲强化**——暴击卡已经归暂停店，那条"过滤掉就不上架"的分支
+     * 在抽样这一路再也没有它了。挑宿主的标准没变：<b>prio 真能稳定挤进前三</b>。第 20 波满血时
+     * 通用侧的形状是 装甲 0.60 / 弹药 0.55 / 超载 0.42 / 随机 0.40（维修满血无效、护盾无上限无效），
+     * 装甲卡的 worst 是 0.60−0.08 = 0.52，高于超载的 best 0.42+0.08 = 0.50 与随机的
+     * 0.40+0.08 = 0.48 ⇒ 只有弹药翻得过它，它这一档稳在前两格。于是先数"没满级时上架了几次"，
+     * 再数"满级后上架了几次"：前者非零、后者为零，这条用例才真的在测过滤，
+     * 而不是测一张本来就排不进前三的卡。
      */
     @Test
     public void maxedCardsLeaveTheShelfInsteadOfSittingThereUnbuyable() {
         ShopRules.Snapshot s = snap(20, 100, 999);
         int onShelf = 0;
         for (long seed = 0; seed < 60; seed++) {
-            if (has(offer(s, seed), Balance.ShopCard.PRECISION)) onShelf++;
+            if (has(offer(s, seed), Balance.ShopCard.HULL)) onShelf++;
         }
-        assertTrue("满级前暴击卡就基本不上架（只有 " + onShelf + "/60 次）：宿主选错了，"
+        assertTrue("满级前装甲卡就基本不上架（只有 " + onShelf + "/60 次）：宿主选错了，"
                 + "满级后为 0 说明不了任何事", onShelf >= 40);
-        s.level[Balance.ShopCard.PRECISION] = ShopRules.maxLevelOf(Balance.ShopCard.PRECISION);
-        assertFalse(ShopRules.isValid(Balance.ShopCard.PRECISION, s));
+        s.level[Balance.ShopCard.HULL] = ShopRules.maxLevelOf(Balance.ShopCard.HULL);
+        assertFalse(ShopRules.isValid(Balance.ShopCard.HULL, s));
         for (long seed = 0; seed < 60; seed++) {
             assertFalse("满级卡又上架了（seed " + seed + "）",
-                    has(offer(s, seed), Balance.ShopCard.PRECISION));
+                    has(offer(s, seed), Balance.ShopCard.HULL));
         }
     }
 
@@ -222,14 +400,29 @@ public class ShopRulesTest {
         }
     }
 
+    /**
+     * 满血的高波次，回合店卖的是"上限与手牌"，不是保命补给，也不是构筑卡。
+     *
+     * <p>用例名字里的"builds"在分区前后换了含义，所以这里把三条断言各自挂在哪道闸门上说清：
+     * <ul>
+     *   <li><b>维修不在</b>——{@code isValid}（满血买它什么都没发生），分区前就有的一道闸。</li>
+     *   <li><b>火力不在</b>——{@code isWaveCard}，分区新加的那道闸，也是这条用例今天真正要测的东西。
+     *       分区前它靠 prio 排在最前（第 18 波 0.85，全场第一），所以旧断言写的是"必在架上"；
+     *       现在同一个 id 必须<b>永远</b>不在回合货架上。这两条断言方向相反，是分区本体的正反面。</li>
+     *   <li><b>装甲必在</b>——prio 的形状（0.25 + 波次项 0.35，第 18 波 = 0.565）加上"满血时
+     *       维修/护盾都无效"，让它成为这一档的常客。装甲 0.565−0.08=0.485 高于随机 0.40+0.08=0.48
+     *       ⇒ 60 个种子没有一个能把它挤出前三。</li>
+     * </ul>
+     */
     @Test
-    public void healthyLateWaveSellsBuildsNotBandAids() {
+    public void healthyLateWaveSellsGeneralsNotBuildups() {
         ShopRules.Snapshot s = snap(18, 100, 999);
         for (long seed = 0; seed < 60; seed++) {
             int[] ids = offer(s, seed);
-            assertTrue("第 18 波满血时最该推的伤害卡缺席", has(ids, Balance.ShopCard.FIREPOWER));
-            assertFalse(has(ids, Balance.ShopCard.SALVO));
-            assertFalse(has(ids, Balance.ShopCard.SURGE));
+            assertTrue("第 18 波满血时最该推的上限卡缺席", has(ids, Balance.ShopCard.HULL));
+            assertFalse("满血还卖维修", has(ids, Balance.ShopCard.REPAIR));
+            assertFalse("构筑卡跑到回合店来了（它归暂停店）",
+                    has(ids, Balance.ShopCard.FIREPOWER));
         }
     }
 
@@ -250,8 +443,10 @@ public class ShopRulesTest {
      *
      * <p>⚠ 这些读数只在**通用侧六张卡**的池子里成立。分区落地前回合店从十二张全表里抽，全表门槛
      * 从波 1 的 0.340 爬到波 20 的 0.700，任何平值都进不了架（0.26 与 0.40 实测都是 0.0%）——
-     * 那条错账曾让我以为这张卡必须随波次爬。下面第一条"满血进不了架"的断言因此**不写**，
-     * 它测的是池子构成而不是这张卡，归 commit B 的分区用例去钉。
+     * 那条错账曾让我以为这张卡必须随波次爬。2026-10-01 commit B1 之后回合店真的只剩这一池，
+     * 上面那些读数才从"探针里的假想池"变成生产形状；"满血到底进不进得了架"这条正着断言由
+     * {@link #randomCardReachesTheWaveShelfOnceThePoolIsGeneralOnly} 钉（它测的是池子构成，
+     * 不是这张卡的分数，所以不混进下面这几条）。
      */
     @Test
     public void randomCardIsAFlatFillerThatYieldsWhenDying() {
@@ -271,7 +466,12 @@ public class ShopRulesTest {
     }
 
     /**
-     * 被打掉六成血时，速度卡必须**每一波都摆得上架**。
+     * 被打掉六成血时，速度卡必须**一直摆在那儿**。
+     *
+     * <p>这条用例的结论没变，承载物换了：分区前"上架"是 prio 挤进前三的结果（所以要跑 60 个种子
+     * 数露脸率），分区后这张卡归暂停店、{@code listShelf} 无条件铺出来 ⇒ 可见性不再依赖概率，
+     * 一次开架就是一次性的事实。他逐字裁的就是换承载物这件事：「提高速度卡出现概率废弃，
+     * 因为失去承载物，仅低价即可」——所以** prio 里那条 0.42 的抬升不再是闸门**，这条断言改钉货架本身。
      *
      * <p>归属与日期在 2026-09-27 逐子句重核过（本仓注释日期 = 本地日；transcript 戳是 UTC，
      * 比日期要先 +8 再取日）：改成限速跟随这个**选择**是用户做的，但那几个字是**我写的选项标签**——
@@ -281,19 +481,20 @@ public class ShopRulesTest {
      *
      * <p>下面那条因果是我的推导，不来自任何一条裁定：触屏走位改成限速跟随之后，机体速度同时是
      * "指针欠账每秒能放出去多少"的上限（{@code DragDebt.consume} 的 speed），所以这张卡不只是躲子弹
-     * 的手段，也是"手感跟不上眼睛"的唯一出口——出口得真的开着，而不是排在十一张末尾、前几波抽不到。
+     * 的手段，也是"手感跟不上眼睛"的唯一出口——出口得真的开着。
+     *
+     * <p>那个"低价"也换了口径：暂停店全价 ⇒ 卡面与扣币端读到的都是 22，不再是折后的 21。
      */
     @Test
     public void bruisedRunAlwaysSeesTheThrustCard() {
         ShopRules.Snapshot s = snap(6, 40, 999);
         s.maxShield = 3;
         s.shield = 1;
-        for (long seed = 0; seed < 60; seed++) {
-            assertTrue("掉了六成血却没有速度卡（seed " + seed + "）",
-                    has(offer(s, seed), Balance.ShopCard.THRUSTS));
-        }
-        assertEquals("速度卡 22 币起卖、过九五折实付 21，第 1 波的钱包就够摸到一级",
-                21, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.THRUSTS], snap(1, 100, 0)));
+        assertTrue("暂停货架上没有速度卡", has(shelf(s), Balance.ShopCard.THRUSTS));
+        ShopRules.Snapshot priced = snap(1, 100, 0);
+        priced.entry = ShopRules.ENTRY_PAUSE;
+        assertEquals("速度卡 22 币起卖、暂停店不打折，第 1 波的钱包就够摸到一级",
+                22, ShopRules.nextPrice(Balance.shopCards[Balance.ShopCard.THRUSTS], priced));
     }
 
     @Test
@@ -324,19 +525,36 @@ public class ShopRulesTest {
         assertTrue(java.util.Arrays.equals(a, b));
     }
 
+    /**
+     * 抖动必须真的在换货架，否则"三选一"退化成"确认键"。
+     *
+     * <p>满血、缺盾这一档通用侧的 prio 形状（现读，非手推公式）：护盾 0.88 / 弹药 0.55 /
+     * 超载 0.42 / 随机 0.40 / 装甲 0.355，维修满血无效。护盾稳在第一；弹药偶尔被
+     * 超载 0.42+0.08 = 0.50 顶到第三；末格在 随机 / 装甲 / 超载 之间换。
+     * 注释里以前那串"弹药 0.55 / 火力 0.50 / 速度 0.495 / 扳机 0.484"是**十二张全表**的读数，
+     * 分区之后那六条构筑卡根本不进这一路，留着会把人引回一张已经不存在的货架。
+     *
+     * <p>⚠ 种子数从 40 提到 2000 是因为**可达排列数**跟着池子一起缩了：12 张挑 3 张的时候 40 个
+     * 种子能看见五六个排列，5 张挑 3 张的时候全部可达排列只有 6 个，而其中两个各只占约 1/2000
+     * ——实测 40、120、400 个连续种子都只数到 4 种货架。留在那一档，这条会在"采样不够"时红，
+     * 而不是在"抖动真的失效"时红，那是假警报。下限 5 贴着观测值 6：把 jitter 调到 0 会只剩 1 种。
+     */
     @Test
     public void jitterActuallyReordersTheShelf() {
-        // 满血、缺盾：这样 prio 的中段（弹药 0.55 / 火力 0.50 / 速度 0.495 / 扳机 0.484 …）
-        // 全都挤在抖动 ±0.08 能翻盘的带里。半血那档反而测不出这件事——速度卡的 prio 抬到 0.72
-        // 之后，"快死了"的货架第三格被它稳定占住，换种子也只换前两张的先后顺序。
         ShopRules.Snapshot s = snap(6, 100, 999);
         s.maxShield = 3;
         s.shield = 1;
         Set<String> distinct = new HashSet<>();
-        for (long seed = 0; seed < 40; seed++) {
-            distinct.add(java.util.Arrays.toString(offer(s, seed)));
+        Set<Integer> lastSlot = new HashSet<>();
+        for (long seed = 0; seed < 2000; seed++) {
+            int[] ids = offer(s, seed);
+            distinct.add(java.util.Arrays.toString(ids));
+            lastSlot.add(ids[ids.length - 1]);
         }
-        assertTrue("三选一退化成了固定菜单（只有 " + distinct.size() + " 种货架）", distinct.size() >= 5);
+        assertTrue("三选一退化成了固定菜单（2000 个种子只见到 " + distinct.size() + " 种货架）",
+                distinct.size() >= 5);
+        assertTrue("末格只有一张卡在轮值（" + lastSlot.size() + " 个候选）：抖动没能换到人",
+                lastSlot.size() >= 3);
     }
 
     @Test
@@ -352,18 +570,19 @@ public class ShopRulesTest {
     /**
      * 把抖动临时调成 0 再验保底：抖动非零时"最靠前那张买得起的卡"会随种子漂，
      * 断言就退化成"偶尔成立"。抖动本身该不该翻盘由 {@link #jitterActuallyReordersTheShelf} 管。
+     *
+     * <p>25 币这一档在分区前后是**两个不同的局**：以前挡在前三的是构筑卡（火力 29 / 扳机 32 /
+     * 贪婪 43），现在它们整条搬到暂停店，回合货架上买不起的前三换成了
+     * 弹药 0.55(52) / 超载 0.42(38) / 随机 0.40(29)，第四名的维修 0.312(24) 才是保底换进来的那张。
+     * 三个 prio 与四档折后价全手推；上一版为了腾出这个局还得把速度卡顶成满级——那张卡现在
+     * 不在这条路上，这一行也跟着没了。
      */
     @Test
     public void theLastSlotIsSpentOnAnAffordableCardWhenTheTopThreeAreNot() {
         float jitter = Balance.shop.prioJitter;
         try {
             Balance.shop.prioJitter = 0f;
-            // 25 币：火力 29 / 扳机 32 / 贪婪 43（都过了九五折）都买不起，三者恰好是 prio 前三。
             ShopRules.Snapshot s = snap(4, 99, 25);
-            s.bombs = 1;                                // 压住弹药卡的 0.55，别让它挤进前三
-            s.level[Balance.ShopCard.THRUSTS] = ShopRules.maxLevelOf(Balance.ShopCard.THRUSTS);
-            // 速度卡折后 21 币，本就买得起——把它顶成满级掉出货架，
-            // 这个"前三全买不起、只能靠保底"的局才还成立。
             int[] ids = offer(s, 1);
             assertEquals(Balance.Shop.OFFER, ids.length);
             assertTrue("保底没把末位换成维修：" + java.util.Arrays.toString(ids),
@@ -386,15 +605,23 @@ public class ShopRulesTest {
         }
     }
 
+    /**
+     * 边界跟着折扣走：护盾卡原价 30，过九五折 = 28.5 → 29 ⇒ 29 币点得动、28 币点不动。
+     * 这对数字同时钉住两件事：扣币端与面板端读的是同一个 nextPrice（否则边界会分裂成两个），
+     * 以及取整方向是"半分向上"（向下取整的话 28 就该点得动了）。
+     *
+     * <p>宿主以前是火力卡：那张卡在分区之后归暂停店、拿的是乘子 1，"折后 29 / 28 币点不动"
+     * 这个局在生产里已经不会出现，留在它身上等于测一条走不到的路。护盾卡在回合货架上，
+     * 而且它的 30 恰好乘出半分，换过去之后这枚钉子钉的仍是生产形状。
+     */
     @Test
     public void purchasableIsTheOneJudgeBothEndsRead() {
-        // 边界跟着折扣走：火力卡原价 30，过九五折 = 28.5 → 29 ⇒ 29 币点得动、28 币点不动。
-        // 这对数字同时钉住两件事：扣币端与面板端读的是同一个 nextPrice（否则边界会分裂成两个），
-        // 以及取整方向是"半分向上"（向下取整的话 28 就该点得动了）。
         ShopRules.Snapshot s = snap(4, 100, 29);
-        assertTrue(ShopRules.purchasable(Balance.shopCards[Balance.ShopCard.FIREPOWER], s));
+        s.maxShield = 3;
+        s.shield = 1;                     // 缺盾才有效：判据是"有效 ∧ 买得起"，两道都得给
+        assertTrue(ShopRules.purchasable(Balance.shopCards[Balance.ShopCard.SHIELD], s));
         s.coins = 28;
-        assertFalse(ShopRules.purchasable(Balance.shopCards[Balance.ShopCard.FIREPOWER], s));
+        assertFalse(ShopRules.purchasable(Balance.shopCards[Balance.ShopCard.SHIELD], s));
         s.coins = 999;
         s.hp = 100;
         assertFalse("满血维修：点它什么都没发生，所以它不该点得动",

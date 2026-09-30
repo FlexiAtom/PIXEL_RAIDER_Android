@@ -20,6 +20,9 @@ package com.flexiatom.pixelraider.game;
 /**
  * 商店的纯算术端：有效性过滤、优先级、三选一抽签、价格阶梯、卡面核心数字。
  *
+ * <p>两个入口、两种货架策略（{@link #ENTRY_WAVE} 抽样三选一 ／ {@link #ENTRY_PAUSE} 常驻整条货架），
+ * 判据全部住在本类，界面只问"这一格是什么"。
+ *
  * 这里**不 import android**，因为"低血时不该抽出三张长线养成卡"这类判据只能靠断言判，
  * 肉眼从截图上看不出来（看不出来 ≠ 没问题，项目级坑里已经记过三次这个形状）。
  *
@@ -55,6 +58,48 @@ public final class ShopRules {
             CORE_SHOTS = 4, CORE_CHOICE = 5;
 
     /**
+     * 商店的两个入口。他的逐字（2026-09-30 直发）：「我提议，波次结束的商店仅提供弹药补给、护盾、
+     * 血量、临时加成之类的，而其他非补给的卡在暂停页做个商店放里面」。
+     *
+     * <p>住在 {@link Snapshot#entry} 上、**开架那一刻冻结一次**，因为"这是哪家店"要同时决定三件事：
+     * 货架构成（{@link #isWaveCard}）、价格乘子（{@link #discountFor}）、以及关店动作——
+     * ⚠ 第三件在 B1 这一步**还没接**：{@code Game.closeShop} 今天无条件清场并推进波次，那是回合店的
+     * 语义，暂停店关掉面板时既不该清空战场也不该结束间奏（接线在下一段，见池件 §12.4）。
+     * ⚠ 做成方法参数而不是快照字段是有代价的：{@link #nextPrice} 有**三个**读取点（卡面、扣币端、
+     * {@link #canAfford}），参数化就等于把"这一处该传哪个入口"变成三道各自可能答错的判断题。
+     * 挂在同一个快照上，三处读的是同一个字节。
+     */
+    public static final int ENTRY_WAVE = 0, ENTRY_PAUSE = 1;
+
+    /**
+     * 这张卡在**哪一侧**的货架上。回合店（通用侧）＝ 补给与临时加成，暂停店（非通用侧）＝ 养成卡。
+     *
+     * <p>必须显式写出来，不许从 {@code priceStep == 0} 猜——两侧各打穿一次那种猜法：
+     * 装甲强化是**通用但不是一次性补给**（阶梯 40+18·lv、有满级，他自己逐字裁「装甲强化归通用」），
+     * 随机强化是**一次性但通用**。他给的轴本来是"补给 / 非补给"，落点收窄成"通用 / 非通用"
+     * 正是被这两张卡逼出来的（池件 §7.4）。
+     *
+     * <p>新卡**默认落进暂停侧**（default 那一路），这个方向是挑过的：常驻那一侧不看 {@link #prio}，
+     * 漏登记一次的表现只是"这张卡摆在了暂停店里"，画面与扣钱都不会错。反过来若默认进通用侧，
+     * 没写过分支的卡会撞上 {@code prio} 的 {@code default: return 0f}，永远排不进前三——表现是
+     * "这张卡根本买不到"，读起来像数值问题，不像漏登记。真正兜底的是 {@code ShopRulesTest}
+     * 钉住的**两侧张数**：加一张而不在这里登记，它就红。
+     */
+    public static boolean isWaveCard(int cardId) {
+        switch (cardId) {
+            case Balance.ShopCard.REPAIR:
+            case Balance.ShopCard.SHIELD:
+            case Balance.ShopCard.SALVO:
+            case Balance.ShopCard.SURGE:
+            case Balance.ShopCard.HULL:
+            case Balance.ShopCard.RANDOM:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
      * 开架那一刻的现状。由 Game 填（一次一填，不是每帧），本类只读。
      *
      * <p>{@link #level} 指向 {@link ShopRun#levels()} 那同一个数组，不复制——复制一份就得在两处
@@ -69,6 +114,12 @@ public final class ShopRules {
         public int bombs;
         public int coins;
         public int[] level = new int[Balance.Shop.CARDS];
+        /**
+         * 开架时冻结的入口（{@link ShopRules#ENTRY_WAVE} ／ {@link ShopRules#ENTRY_PAUSE}）。
+         * 默认回合店 —— 字段初值就是那个"折扣与抽样都照旧"的旧行为，加了这个字段而没接线
+         * 的调用点不会悄悄变成暂停店。
+         */
+        public int entry = ENTRY_WAVE;
 
         public float hpRatio() {
             return maxHp <= 0 ? 1f : (float) hp / (float) maxHp;
@@ -156,12 +207,23 @@ public final class ShopRules {
         int max = maxLevelOf(card.id);
         if (max != UNLIMITED && lv >= max) return Balance.Shop.PRICE_MAXED;
         int raw = card.priceBase + card.priceStep * Math.max(0, lv);
-        // 九五折（I-3）只有这一个乘点：卡面显示的价与扣币端算的价必须出自同一个函数，各乘一份
+        // 折扣（I-3）只有这一个乘点：卡面显示的价与扣币端算的价必须出自同一个函数，各乘一份
         // 就会长成"写着 28、扣 30"——本仓规格点名的"显示与结算不一致"那一类。
         // 上面那两条 PRICE_MAXED 早退在乘子之前 ⇒ 哨兵原样透出，不靠"-1×0.95 取整还是 -1"这种巧合。
-        // ⚠ 他裁的是"**回合结束那个**商店打九五折"（暂停页那家全价）。今天只有回合这一个入口，
-        // 所以先无条件乘；暂停入口落地时必须在这里引入入口判据，把 1f 留给它，别让折扣跟着过去。
-        return Math.round(raw * Balance.shop.waveDiscount);
+        // 乘子由入口派生（他裁的是"**回合结束那个**商店打九五折"，暂停页那家全价），
+        // 见 {@link #discountFor}——两个入口共用这一行，所以"哪家店"必须由快照说，不能由调用方说。
+        return Math.round(raw * discountFor(s.entry));
+    }
+
+    /**
+     * 这个入口的价格乘子：回合店九五折（{@link Balance.Shop#waveDiscount}），暂停店**全价**。
+     *
+     * <p>暂停侧没有折扣字段，是**故意**的：他给的 0.95 挂在"回合结束那个商店"这句话上，
+     * 把它做成一个全局乘子会悄悄覆盖两个入口。真要给暂停店配折扣，就再加一个字段，
+     * 而不是把这里改成 {@code 1f} 之外的任何东西。
+     */
+    public static float discountFor(int entry) {
+        return entry == ENTRY_WAVE ? Balance.shop.waveDiscount : 1f;
     }
 
     // ---- 过滤与优先级 ---------------------------------------------------------------------
@@ -197,14 +259,20 @@ public final class ShopRules {
     /**
      * 「当前最缺什么」的分数。**没有量纲**，只在同一张货架内比较（规格 §升级商店：不是纯随机）。
      *
+     * <p>⚠ 分区之后（2026-10-01）**只有通用侧那六张还有生产读取点**——{@link #selectOffer} 先按
+     * {@link #isWaveCard} 过滤，非通用侧走 {@link #listShelf} 根本不比较分数。下面六条养成卡的分支
+     * 今天只剩测试与探针在读（{@code ShelfMix} 靠它复算门槛）。删它们要单独一轮，依据写的是
+     * "没有读取点"而不是"看着多余"（池件 §7.5）。
+     *
      * <p>两条线：
      * <ul>
      *   <li><b>保命项</b>随血量缺口上升，并且额外叠一项"低于 {@link Balance.Shop#panicHpRatio}
      *       就陡增"的台阶。台阶是必需的：0.35 血和 0.45 血只差 0.1，长线卡的波次项一旦爬到 0.8，
      *       纯线性会让"快死了推养成卡"在高波次重新出现。</li>
-     *   <li><b>长线养成项</b>随波次上升（越到后面越值），贪婪卡反向随波次**衰减</b>——
-     *       它的收益是"之后每一波掉的金币都乘一下"，第 2 波买和第 18 波买不是同一个商品，
-     *       卡面 tip 说了"越早买越划算"，prio 就得真的这么排。</li>
+     *   <li><b>长线养成项</b>随波次上升（越到后面越值），贪婪卡反向随波次**衰减**——它的收益是
+     *       "之后每一波掉的金币都乘一下"，第 2 波买和第 18 波买不是同一个商品，卡面那句
+     *       "越早买越划算"要有人替它排序才成立。分区之后这六条都不再决定上架（它们改由
+     *       {@link #listShelf} 无条件可见），形状保留只为让"越早越划算"这件事还能被断言。</li>
      * </ul>
      */
     public static float prio(int cardId, Snapshot s) {
@@ -228,7 +296,10 @@ public final class ShopRules {
                 // 触屏走位改成限速跟随之后，
                 // 机体速度同时是"指针欠账每秒能放出去多少"的上限（见 DragDebt.consume 的 speed），
                 // 这张卡因此不只是躲子弹的手段，也是"手感跟不上眼睛"的唯一出口——
-                // 原来它满血时排在全部 11 张的末尾，前几波基本抽不到，等于那条出口没开。
+                // 原来它满血时排在全部卡的末尾，前几波基本抽不到，等于那条出口没开。
+                // ⚠ 分区（2026-10-01）之后这张卡归**暂停店**，常驻可见、压根不走抽样 ⇒ 这条抬升
+                // 已经没有承载物，他逐字裁的就是这件事：「提高速度卡出现概率废弃，因为失去承载物，
+                // 仅低价即可」。低价（22/10）留着；这条分支只作为 prio 全表函数的一环留着，不再是闸门。
                 return 0.42f + deficit * 0.50f + waveTerm * 0.25f;
             case Balance.ShopCard.HULL:
                 // 抬上限是"接下来这一整波都受益"的投资：血已经见底时才让位给立刻能用的维修。
@@ -283,26 +354,35 @@ public final class ShopRules {
     }
 
     /**
-     * 抽这一波的三张卡：过滤无效 → 按 prio + 抖动降序 → 取前 {@link Balance.Shop#OFFER} 张。
+     * 开架：把这一家店的货写进 {@code out}。**入口决定货架策略**，判据只在这一处分支：
+     *
+     * <ul>
+     *   <li>{@link #ENTRY_WAVE} 回合店 —— 只在通用侧抽：过滤无效 → 按 prio + 抖动降序 →
+     *       取前 {@link Balance.Shop#OFFER} 张。</li>
+     *   <li>{@link #ENTRY_PAUSE} 暂停店 —— 非通用侧**整条摆出来**（{@link #listShelf}），不抽样。</li>
+     * </ul>
      *
      * <p>抖动是必需的：纯 prio 的话同一局每次开架都是同三张，"三选一"退化成"确认键"。
      * 幅度钉在 {@link Balance.Shop#prioJitter}（默认 0.08）——它要小到翻不了保命/养成的盘，
      * 又要大到让同级卡换位。
      *
-     * <p>一条硬保底：货架上**只要存在**买得起的卡，三张里就至少有一张买得起。规格那句
-     * "玩家会觉得系统在为难他"同样适用于"三张都点不动"。买得起的卡照样上架（它是信息，
+     * <p>一条硬保底（只对抽样那一路）：货架上**只要存在**买得起的卡，三张里就至少有一张买得起。
+     * 规格那句"玩家会觉得系统在为难他"同样适用于"三张都点不动"。买得起的卡照样上架（它是信息，
      * 而且下一波还会掉币），不做全过滤。
      *
      * @param score 工作区，长度 ≥ {@link Balance.Shop#CARDS}
      * @param order 工作区，返回时前 n 项是按分数降序的卡 id
-     * @param out   货架，返回时前 n 项是卡 id
-     * @return 实际上架张数（卡池被过滤空时会少于三张）
+     * @param out   货架，返回时前 n 项是卡 id。⚠ 长度上限由入口决定：暂停侧会写到**整条非通用侧**
+     *              （今天 6 张，簇 II 之后 10 张），按 {@link Balance.Shop#OFFER} 开的数组会越界。
+     *              调用方按 {@link Balance.Shop#CARDS} 开。
+     * @return 实际上架张数（通用侧被过滤空时会少于三张）
      */
     public static int selectOffer(Snapshot s, Rng rng, float[] score, int[] order, int[] out) {
+        if (s.entry != ENTRY_WAVE) return listShelf(s, out);
         float jitter = Balance.shop.prioJitter;
         int n = 0;
         for (int id = 0; id < Balance.shopCards.length; id++) {
-            if (!isValid(id, s)) continue;
+            if (!isWaveCard(id) || !isValid(id, s)) continue;
             order[n] = id;
             score[n] = prio(id, s) + (rng == null ? 0f : rng.range(-jitter, jitter));
             n++;
@@ -324,6 +404,31 @@ public final class ShopRules {
         System.arraycopy(order, 0, out, 0, taken);
         ensureAffordable(s, order, n, out, taken);
         return taken;
+    }
+
+    /**
+     * 暂停店的货架：非通用侧**整条铺出来**，按 id 稳定排序，不过滤余额。
+     *
+     * <p>为什么不走 {@link #selectOffer} 那一路抽样：三选一是"这一波该卖什么"的裁决，常驻货架
+     * 没有这个问题——他逐字要的是"其他非补给的卡在暂停页做个商店放里面"，**全部可见**才是这块板子
+     * 的意义（也因此这一侧不看 {@link #prio}：构筑卡那几条分支在**生产路径**上没有读取点了，
+     * 只剩测试与探针还在读，见 {@link #prio} 上那段注释与删它们的正确依据）。
+     *
+     * <p>为什么按 id 而不是按"买得起/缺什么"排：货位一旦随金币漂移，玩家下次拉开面板就得重新找
+     * 那张卡。买不买得起由 {@link #purchasable} 在面板上画成禁用态，那是显示，不是库存。
+     *
+     * <p>满级的卡由 {@link #isValid} 那道闸门剔除（与通用侧同一个判据），不是画一张点不动的卡。
+     *
+     * @param out 长度 ≥ 非通用侧张数，见 {@link #selectOffer} 的同一句警告
+     * @return 上架张数
+     */
+    public static int listShelf(Snapshot s, int[] out) {
+        int n = 0;
+        for (int id = 0; id < Balance.shopCards.length; id++) {
+            if (isWaveCard(id) || !isValid(id, s)) continue;
+            out[n++] = id;
+        }
+        return n;
     }
 
     /** 把"三张全买不起"这一种局换掉：末位换成排序里最靠前的一张买得起的卡。 */
