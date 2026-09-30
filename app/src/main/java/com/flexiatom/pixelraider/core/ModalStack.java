@@ -1,6 +1,6 @@
 /*
  * PIXEL RAIDER — 原生 Android 纵版弹幕射击
- * Copyright (C) 2026 Flexiatom
+ * Copyright (C) 2026 FlexiAtom
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
