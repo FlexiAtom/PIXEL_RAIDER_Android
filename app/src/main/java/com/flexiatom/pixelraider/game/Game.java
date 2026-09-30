@@ -222,7 +222,7 @@ public final class Game implements GameThread.Host {
     private final ShopRules.Snapshot shopSnap = new ShopRules.Snapshot();
     private final float[] shopScore = new float[Balance.Shop.CARDS];
     private final int[] shopOrder = new int[Balance.Shop.CARDS];
-    private final int[] shopOffer = new int[Balance.Shop.OFFER];
+    private final int[] shopOffer = new int[Balance.Shop.CARDS];
     /** 进入商店的界面时刻（面板的入场与级联都以它为原点）。 */
     private float shopAtUi;
     /** 上一帧的波次相位：只用来看"刚刚清完一波"这一条边沿。 */
@@ -602,12 +602,14 @@ public final class Game implements GameThread.Host {
         }
         if (shopPending && modals.peek() == ModalStack.NONE) {
             shopPending = false;
-            openShop();
+            openShop(ShopRules.ENTRY_WAVE);
         }
     }
 
-    private void openShop() {
+    private void openShop(int entry) {
         fillShopSnapshot();
+        // 入口在开架这一瞬冻结进快照：货架摆什么、打不打折、关店干什么，三件事都由它派生
+        shopSnap.entry = entry;
         int n = ShopRules.selectOffer(shopSnap, rng, shopScore, shopOrder, shopOffer);
         shop.open(shopOffer, n, shopSnap);
         modals.push(ModalStack.SHOP);
@@ -616,12 +618,21 @@ public final class Game implements GameThread.Host {
         shopAtUi = time.ui();
     }
 
-    /** 关店 = 这一波的静场结束，直接进下一波的 PREP（横幅照给，出怪不提前）。 */
+    /**
+     * 关店。**做什么由入口决定，不由调用点决定**（{@code ShopRules.ENTRY_*}）。
+     *
+     * <p>回合店：这一波的静场到此结束，直接进下一波的 PREP（横幅照给，出怪不提前）。
+     * 商店是静场：回来时战场也该是静的——留着那批在清场瞬间冻住的敌弹，等于让玩家在购买界面
+     * 停留半分钟之后落地即死。掉落物不清，那是玩家打出来的钱。
+     *
+     * <p>暂停店：只是把面板掀回暂停页。栈里 SHOP 下面压着 PAUSE，走位与射击的闸门看栈顶，
+     * 时钟本来就是冻着的，所以这里**只 pop**——清场会把玩家暂停前面对的弹幕抹掉，
+     * {@code finishIntermission()} 会在间奏里凭空推进波次，两条都是拿回合店的语义去套暂停店。
+     */
     private void closeShop() {
         if (modals.peek() != ModalStack.SHOP) return;
         modals.pop();
-        // 商店是静场：回来时战场也该是静的。留着那批在清场瞬间冻住的敌弹，等于让玩家在购买
-        // 界面停留半分钟之后落地即死。掉落物不清——那是玩家打出来的钱。
+        if (shopSnap.entry == ShopRules.ENTRY_PAUSE) return;
         hostile.clear();
         wave.finishIntermission();
         time.setPaused(false);

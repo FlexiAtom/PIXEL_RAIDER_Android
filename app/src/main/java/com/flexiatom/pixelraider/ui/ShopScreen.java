@@ -35,23 +35,36 @@ import com.flexiatom.pixelraider.plat.Screen;
 /**
  * 升级商店面板（规格 §升级商店）。
  *
- * <p>三张卡，**整卡即按钮**——MD3 的卡片本来就可点；再往卡里塞一枚"购买"小按钮会把 212 逻辑像素
+ * <p>整卡即按钮——MD3 的卡片本来就可点；再往卡里塞一枚"购买"小按钮会把 212 逻辑像素
  * 宽的卡面切成两半，那句 tip 就得折行。价格写在名字行右端：它既是标签，也是可点性的承诺。
+ *
+ * <p>每一页摆几张、要翻几页全由 {@link ShopLayout} 按可用高倒推，这里只问"这一页第几格是什么"。
+ * 翻页是面板自己的状态：它不动金币、不动等级、也不惊动 {@code Game}，所以它**不是**一种动作码
+ * （{@link #pressUp} 翻完页直接报 {@link #ACTION_NONE}）。
  *
  * <p>面板只决定"点到哪一格"，扣币与实际生效（回血、给炸弹、转好超载、抬上限）全在 {@code Game}：
  * 与 {@link PauseScreen} 同一套分工。所以报出去的动作是 {@link #ACTION_BUY} 加**槽位**而不是卡 id
- * ——卡每次开架都会重排。
+ * ——卡每次开架都会重排，槽位也只在当前这一页里有效。
  */
 public final class ShopScreen {
 
     public static final int ACTION_NONE = 0;
     public static final int ACTION_NEXT = 1;
-    /** 提交动作 = {@code ACTION_BUY + 槽位}（槽位 0..{@link ShopLayout#CARDS}-1）。 */
+    /** 提交动作 = {@code ACTION_BUY + 槽位}（槽位 0..{@link ShopLayout#MAX_CARDS}-1，**当前页内**）。 */
     public static final int ACTION_BUY = 2;
+
+    /** 命中区下标：卡槽之后依次是出口、上一页、下一页。出口沿用旧下标，动作码区间不动。 */
+    private static final int IDX_PRIMARY = ShopLayout.MAX_CARDS;
+    private static final int IDX_PREV = ShopLayout.MAX_CARDS + 1;
+    private static final int IDX_LAST = ShopLayout.MAX_CARDS + 2;
 
     private static final String L_TITLE = "升级商店";
     private static final String L_COINS = "金币";
     private static final String L_NEXT = "进入下一波";
+    /** 暂停店那个入口关掉的只是面板，战场还在原地冻着——所以它不能写着"进入下一波"。 */
+    private static final String L_BACK = "返回";
+    private static final String L_PAGE_PREV = "上一页";
+    private static final String L_PAGE_NEXT = "下一页";
     private static final String L_MAXED = "已满级";
     private static final String L_EMPTY = "货架空了";
     private static final String L_READY = "立即就绪";
@@ -69,9 +82,9 @@ public final class ShopScreen {
     private final ShopLayout box = new ShopLayout();
     private final HudText hud = new HudText(32);
     private final PressSelector press = new PressSelector();
-    /** 命中区：三张卡 + 唯一出口。下标 0..{@link ShopLayout#CARDS}-1 = 槽位，最后一格 = 下一波。 */
-    private final RectI[] hit = boxes(ShopLayout.CARDS + 1);
-    private final int[] offer = new int[ShopLayout.CARDS];
+    /** 命中区：一整架卡 + 出口 + 两枚翻页箭头（箭头不常驻，见 {@link #tappable}）。 */
+    private final RectI[] hit = boxes(IDX_LAST + 1);
+    private final int[] offer = new int[ShopLayout.MAX_CARDS];
     /**
      * 开架时那一瞬的现状，**引用** {@code Game} 持有的实例（不是副本）。
      *
@@ -80,7 +93,10 @@ public final class ShopScreen {
      */
     private ShopRules.Snapshot view = new ShopRules.Snapshot();
     private int offered;
+    private int page;
     private int canvasH = Screen.BATTLE_H;
+    /** {@link #layout} 收到的那三个尺寸，开架与翻页时要用同一份重算（板子高随这一页的卡数变）。 */
+    private int safeTop, safeBottom, minTouch;
 
     public ShopScreen(BitmapFont font, TextCache text, GlowAtlas glow) {
         kit = new DrawKit(font, text, glow);
@@ -97,24 +113,44 @@ public final class ShopScreen {
         offered = Math.max(0, Math.min(count, offer.length));
         System.arraycopy(ids, 0, offer, 0, offered);
         view = snapshot == null ? new ShopRules.Snapshot() : snapshot;
+        page = 0;
         press.clear();
+        applyLayout();
     }
 
     public int offeredCount() {
         return offered;
     }
 
+    /** @return 这一页第 {@code slot} 格卖的那张卡，空位 -1 */
     public int offerAt(int slot) {
-        return slot < 0 || slot >= offered ? -1 : offer[slot];
+        int i = box.pageStart + slot;
+        return slot < 0 || i < 0 || i >= offered ? -1 : offer[i];
     }
 
     public void layout(int logicH, int safeTop, int safeBottom, int minTouchLogic) {
         canvasH = logicH <= 0 ? Screen.BATTLE_H : logicH;
-        box.layout(canvasH, safeTop, safeBottom);
-        for (int i = 0; i < ShopLayout.CARDS; i++) {
-            Widgets.hitRect(box.cards[i], minTouchLogic, hit[i]);
+        this.safeTop = safeTop;
+        this.safeBottom = safeBottom;
+        this.minTouch = minTouchLogic;
+        applyLayout();
+    }
+
+    /**
+     * 重算板子与命中区。
+     *
+     * <p>为什么不能只在几何投递时算一次：面板高度等于**这一页**的内容高，于是开架（0 张→3 张→
+     * 暂停店 6 张）与翻页都会改它。只按 {@code installGeometry} 那一次算的话，暂停店第二页会照着
+     * 第一页的矩形命中——玩家点的是空处。
+     */
+    private void applyLayout() {
+        box.layout(canvasH, safeTop, safeBottom, offered, page);
+        for (int i = 0; i < ShopLayout.MAX_CARDS; i++) {
+            Widgets.hitRect(box.cards[i], minTouch, hit[i]);
         }
-        Widgets.hitRect(box.next, minTouchLogic, hit[ShopLayout.CARDS]);
+        Widgets.hitRect(box.next, minTouch, hit[IDX_PRIMARY]);
+        Widgets.hitRect(box.pagePrev, minTouch, hit[IDX_PREV]);
+        Widgets.hitRect(box.pageNext, minTouch, hit[IDX_LAST]);
     }
 
     public void pressDown(int x, int y, float elapsed, int pointerId) {
@@ -128,15 +164,31 @@ public final class ShopScreen {
     /** @return {@link #ACTION_NONE}、{@link #ACTION_NEXT} 或 {@code ACTION_BUY + 槽位} */
     public int pressUp(int x, int y, float elapsed, int pointerId) {
         int i = press.releaseTo(under(x, y - lift(elapsed), elapsed), pointerId);
-        return i == PressSelector.NONE ? ACTION_NONE
-                : i == ShopLayout.CARDS ? ACTION_NEXT : ACTION_BUY + i;
+        if (i == PressSelector.NONE) return ACTION_NONE;
+        if (i == IDX_PRIMARY) return ACTION_NEXT;
+        if (i >= IDX_PREV) {
+            turnPage(i == IDX_PREV ? -1 : 1);
+            return ACTION_NONE;
+        }
+        return ACTION_BUY + i;
+    }
+
+    /** 翻一页，然后立刻把矩形换掉——抬起之后同一根手指还可能继续按在新一页的卡上。 */
+    private void turnPage(int delta) {
+        int p = box.page + delta;
+        if (p < 0 || p >= box.pages) return;
+        page = p;
+        applyLayout();
     }
 
     public void clearPress() {
         press.clear();
     }
 
-    /** 当前被按住的格子下标（0..2 = 槽位，3 = 出口），没有则 -1。测试与外部的按压态都读它。 */
+    /**
+     * 当前被按住的格子下标（0..{@link ShopLayout#MAX_CARDS}-1 = 槽位，往后是出口与两枚箭头），
+     * 没有则 -1。测试与外部的按压态都读它。
+     */
     public int pressedSlot() {
         return press.pressed();
     }
@@ -145,24 +197,19 @@ public final class ShopScreen {
      * 命中的第几格；未命中 {@link PressSelector#NONE}。
      *
      * <p>买不起的卡**不注册命中**：点一张灰卡"没反应"是真的没反应，那比看着它灰着更糟
-     * （规格点名的"点了没反应"bug 类）。出口不看余额，永远可点。
+     * （规格点名的"点了没反应"bug 类）。出口不看余额，永远可点；箭头只看翻不翻得动。
      *
      * <p>每一格还要等自己**淡完**才可点（与 {@link PauseScreen} 同一条规矩）：入场 0.28 秒里
      * 第三张卡只淡了两成，这时候点它等于买走一张玩家还没看清的卡；出口更糟——它在 0.02 秒
      * 就有 6% 的不透明度，手快的人会在看见商店之前就把这一波的商店关掉了。
      *
-     * <p>两遍 pass（先绘制框再外扩框）与 {@link PauseScreen} 同理：三张卡 60 高、间距 4，
+     * <p>两遍 pass（先绘制框再外扩框）与 {@link PauseScreen} 同理：卡 60 高、间距 4，
      * 外扩到 48dp 之后互相压，只认外扩框会把上一张的边让给下一张。
      */
     private int under(int x, int y, float elapsed) {
         for (int pass = 0; pass < 2; pass++) {
             for (int i = 0; i < hit.length; i++) {
-                if (i < ShopLayout.CARDS) {
-                    if (i >= offered || !purchasable(i)) continue;
-                    if (PanelMotion.buttonProgress(i, elapsed) < 1f) continue;
-                } else if (PanelMotion.enterProgress(elapsed) < 1f) {
-                    continue;
-                }
+                if (!tappable(i, elapsed)) continue;
                 RectI r = pass == 0 ? drawn(i) : hit[i];
                 if (r.contains(x, y)) return i;
             }
@@ -170,8 +217,22 @@ public final class ShopScreen {
         return PressSelector.NONE;
     }
 
+    /** 这一格现在该不该受理：内容上有效（买得起 / 翻得动）而且已经淡完。 */
+    private boolean tappable(int i, float elapsed) {
+        if (i < ShopLayout.MAX_CARDS) {
+            return i < box.shown && purchasable(i) && PanelMotion.buttonProgress(i, elapsed) >= 1f;
+        }
+        if (PanelMotion.enterProgress(elapsed) < 1f) return false;
+        if (i == IDX_PREV) return box.page > 0;
+        if (i == IDX_LAST) return box.page < box.pages - 1;
+        return true;
+    }
+
     private RectI drawn(int i) {
-        return i < ShopLayout.CARDS ? box.cards[i] : box.next;
+        if (i == IDX_PRIMARY) return box.next;
+        if (i == IDX_PREV) return box.pagePrev;
+        if (i == IDX_LAST) return box.pageNext;
+        return box.cards[i];
     }
 
     private boolean purchasable(int slot) {
@@ -195,7 +256,8 @@ public final class ShopScreen {
         drawFrame(c, p);
         drawTitle(c, p);
         drawCards(c, run, elapsed);
-        drawNext(c, p, press.pressed() == ShopLayout.CARDS);
+        drawPageArrows(c, p);
+        drawNext(c, p, press.pressed() == IDX_PRIMARY);
         c.restoreToCount(save);
     }
 
@@ -213,14 +275,14 @@ public final class ShopScreen {
                 Md3.onSurfaceVariant(), Md3.primary(), alpha, 1);
     }
 
-    /** 每张卡延后一级淡入：三张同时"啪"地出现，视线一张也抓不住。 */
+    /** 每张卡延后一级淡入：一屏卡同时"啪"地出现，视线一张也抓不住。 */
     private void drawCards(Canvas c, ShopRun run, float elapsed) {
         if (offered == 0) {
             kit.bakedCentered(c, L_EMPTY, Md3.PX_LABEL, Md3.onSurfaceVariant(),
-                    box.panel.centerX(), box.cards[1].centerY(), Math.round(255f * p(elapsed)));
+                    box.pool.centerX(), box.pool.centerY(), Math.round(255f * p(elapsed)));
             return;
         }
-        for (int i = 0; i < offered; i++) {
+        for (int i = 0; i < box.shown; i++) {
             drawCard(c, i, run, PanelMotion.buttonProgress(i, elapsed));
         }
     }
@@ -232,7 +294,7 @@ public final class ShopScreen {
     /** @param k 该格自己的淡入度（级联进度），0 时整张不画 */
     private void drawCard(Canvas c, int slot, ShopRun run, float k) {
         if (k <= 0f) return;
-        int id = offer[slot];
+        int id = offerAt(slot);
         Balance.ShopCard card = Balance.shopCards[id];
         RectI r = box.cards[slot];
         int alpha = Math.round(255f * k);
@@ -339,6 +401,37 @@ public final class ShopScreen {
         kit.numberRight(c, hud, rightEdge, cy, 1, Md3.onSurfaceVariant(), alpha);
     }
 
+    /**
+     * 翻页箭头：只在真翻了页的货架上出现，样式一律比出口低一档（等宽不等色）。
+     *
+     * <p>第一页的「上一页」与末页的「下一页」画出来但不受理（{@link #tappable}），
+     * 而不是让箭头忽左忽右地消失——箭头位置一动，玩家刚建立起来的"中间那枚才是走人"就散了。
+     */
+    private void drawPageArrows(Canvas c, float p) {
+        if (box.pages <= 1) return;
+        int alpha = Math.round(255f * p);
+        drawPageArrow(c, box.pagePrev, L_PAGE_PREV, box.page > 0,
+                press.pressed() == IDX_PREV, alpha);
+        drawPageArrow(c, box.pageNext, L_PAGE_NEXT, box.page < box.pages - 1,
+                press.pressed() == IDX_LAST, alpha);
+    }
+
+    private void drawPageArrow(Canvas c, RectI r, String label, boolean enabled,
+                               boolean pressed, int alpha) {
+        kit.roundRect(c, r, Md3.R_SMALL, Md3.surfaceContainerHighest(), alpha);
+        if (pressed) {
+            kit.stateLayer(c, r, Md3.R_SMALL, Md3.onSurface(), Md3.STATE_PRESSED_ALPHA);
+        }
+        int ink = enabled ? alpha : alpha * Md3.DISABLED_ALPHA_PERMILLE / 1000;
+        kit.bakedCentered(c, label, Md3.PX_BODY, Md3.onSurfaceVariant(),
+                r.centerX(), r.centerY(), ink);
+    }
+
+    /** 出口那句字由入口决定：同一枚按钮在两家店里承诺的是两件不同的事，写同一句就是撒谎。 */
+    private String exitLabel() {
+        return view.entry == ShopRules.ENTRY_PAUSE ? L_BACK : L_NEXT;
+    }
+
     private void drawNext(Canvas c, float p, boolean pressed) {
         RectI r = box.next;
         int alpha = Math.round(255f * p);
@@ -346,6 +439,7 @@ public final class ShopScreen {
         if (pressed) {
             kit.stateLayer(c, r, Md3.R_SMALL, Md3.onPrimary(), Md3.STATE_PRESSED_ALPHA);
         }
-        kit.bakedCentered(c, L_NEXT, Md3.PX_BODY, Md3.onPrimary(), r.centerX(), r.centerY(), alpha);
+        kit.bakedCentered(c, exitLabel(), Md3.PX_BODY, Md3.onPrimary(),
+                r.centerX(), r.centerY(), alpha);
     }
 }

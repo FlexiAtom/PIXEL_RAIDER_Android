@@ -30,10 +30,11 @@ import com.flexiatom.pixelraider.plat.Screen;
  * 居中原点由 {@code Screen.Metrics.pageTop(PAGE_H)} 给；这里的坐标全是这一页自己的相对坐标，
  * 命中框在 {@code layout} 里加一次 pageTop 换成屏幕坐标，两套坐标只在那一处换算。
  *
- * <p>{@link #ROWS} 与 {@link #DOT_MAX} 直接取自 {@code Balance.Growth}，不像
- * {@link ShopLayout#CARDS} 那样抄一个字面量再由测试钉相等：那一枚是**版面数**（一次上架几张卡
- * 归版面管），这两枚是**数据**（树有几项、每项几级由表说了算）。抄一份进版面就等于给
- * "改表忘改面板"留一条缝——而缝的两边一边能买、一边画不出来。
+ * <p>{@link #ROWS} 与 {@link #DOT_MAX} 直接取自 {@code Balance.Growth}，不在版面里抄一份字面量：
+ * 树有几项、每项几级由表说了算，抄进版面就等于给"改表忘改面板"留一条缝——而缝的两边一边能买、
+ * 一边画不出来。{@code ShopLayout.MAX_CARDS} 2026-09-30 的分区改造之后也回到这条规矩上：它以前
+ * 写死 3 是因为"一次上架三张"真的归版面管，现在每页几张由画布算、总几张由卡表算，版面那个数
+ * 已经没有对应的决定权了。
  */
 public final class GrowthLayout {
 

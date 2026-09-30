@@ -18,6 +18,7 @@
 package com.flexiatom.pixelraider.ui;
 
 import com.flexiatom.pixelraider.core.RectI;
+import com.flexiatom.pixelraider.game.Balance;
 import com.flexiatom.pixelraider.plat.Screen;
 
 /**
@@ -25,9 +26,14 @@ import com.flexiatom.pixelraider.plat.Screen;
  * 卡的总数不在这里写死，读 {@code Balance.Shop.CARDS}）。
  *
  * <p>与暂停面板的分工：那块是"激战里拉开的数据板"，八张卡要在 320~560 的每种逻辑高上分账，
- * 所以它铺满整屏；这块只有三张卡，卡的**内容高度是固定的**（图标行 + 数字行 + 说明行），
+ * 所以它铺满整屏；这块每一页的卡**内容高度是固定的**（图标行 + 数字行 + 说明行），
  * 长高不带来任何信息。所以它是**底部弹层**：面板高度等于内容高度，多出来的高度还给战场
  * （玩家站在商店前面得能看见自己面对的是什么），只有内容装进不去时才退回贴满可用区。
+ *
+ * <p>**一页摆几张由可用高度倒推，不由卡数写死**（{@link #capacityFor}）。2026-09-30 双入口分区之后
+ * 这家店有两种货架：回合店抽三张，暂停店摆整条非通用侧（簇 II 之后十张）——一个定长版面装不下
+ * 后者。装不下的翻到下一页（{@link #pages}），而不是把卡压矮：卡一矮，先掉出去的是说明行，
+ * 而说明正是玩家判断"这张要不要"的那条信息。一页的下限是一次三选一，比它更挤的局才落到压卡分支。
  *
  * <p>坐标一律是**逻辑画布坐标**（0..logicH），不做 {@code translate(battleTop)}。
  */
@@ -58,8 +64,12 @@ public final class ShopLayout {
     /** 卡内上下留白。 */
     public static final int CARD_PAD = 4;
     public static final int CARD_H = CARD_PAD * 2 + ROW1_H + ROW_GAP + ROW2_H + ROW_GAP + ROW3_H;
-    /** 一次上架几张。数值由 {@code ShopLayoutTest} 钉住等于 {@code Balance.Shop.OFFER}。 */
-    public static final int CARDS = 3;
+    /**
+     * 版面最多摆几张 = 卡表条数。**不是**"一次上架几张"——那个数住在 {@code Balance.Shop.OFFER}
+     * （回合店）与 {@code ShopRules#listShelf} 的返回值（暂停店整条）里，两边都可能小于它。
+     * 这里只决定数组长度与分页上限。
+     */
+    public static final int MAX_CARDS = Balance.Shop.CARDS;
     public static final int CARD_GAP = 4;
 
     /** 标题在上边框内的呼吸位。 */
@@ -67,42 +77,81 @@ public final class ShopLayout {
     /** 标题与卡区、卡区与出口按钮之间的固定间隙。 */
     public static final int POOL_TOP_GAP = 6, POOL_BOTTOM_GAP = 8;
 
-    /** 唯一出口：进入下一波。买与不买都是"离开商店"，所以它既是主操作也是关闭动作。 */
+    /** 唯一出口：离开这家店。买与不买都是"离开商店"，所以它既是主操作也是关闭动作。 */
     public static final int ROW_PRIMARY_H = 22;
     public static final float PRIMARY_W_RATIO = 0.76f;
+    /** 需要翻页时，出口那一行切成的格数：上一页 / 出口 / 下一页。 */
+    public static final int PAGE_ROW_COLS = 3;
 
     public static final int PANEL_LIFT = 28;
 
-    /** 卡区理想高：三张整卡 + 两个间距。 */
-    public static final int STACK_H = CARDS * CARD_H + (CARDS - 1) * CARD_GAP;
+    /**
+     * 弹层里**与卡数无关**的那一截：两条边框 + 标题位 + 池子上下间隙 + 出口行 + 卡区下留白。
+     * 翻页按钮挤在出口行里，所以翻不翻这一截都一样——这是 {@link #capacityFor} 能只看卡数的原因。
+     */
+    public static final int CHROME_H = BORDER + TITLE_TOP_PAD + TITLE_H + POOL_TOP_GAP
+            + POOL_BOTTOM_GAP + ROW_PRIMARY_H + PAD + BORDER;
+
+    /** c 张卡时弹层**理想**高度（装得下的前提下面板就等于它，长高不带来信息）。 */
+    public static int sheetHeight(int c) {
+        return CHROME_H + Math.max(0, c) * CARD_H + Math.max(0, c - 1) * CARD_GAP;
+    }
 
     /**
-     * 弹层的理想高度——上下边框之间**内容自己需要的**高度，一段都不含"剩余"。
+     * 高 {@code usable} 的可用区一页摆得下几张——把 {@link #sheetHeight} 反解出来：
+     * {@code c·CARD_H + (c−1)·CARD_GAP ≤ usable − CHROME_H}
+     * ⇔ {@code c ≤ (usable − CHROME_H + CARD_GAP) / (CARD_H + CARD_GAP)}。
      *
-     * <p>由常量派生而不是写死：任何一处内容尺寸改动（卡变高、标题换行）都会自动带着弹层走，
-     * 不会出现"内容 262、板子还按 260 画"这种把说明带裁掉的错。
+     * <p>**下限是 {@code Balance.Shop.OFFER} 而不是 1**：三选一是这家店的设计单位（规格 §升级商店
+     * "每波三选一"），把一次选择拆到两页上等于把选择拆成两次"要不要"——玩家看不到第三个候选就
+     * 没法比较。厚安全区叠上矮画布时宁可让 {@link #layout} 的压卡分支把说明带削掉几像素，
+     * 也不翻页。
      */
-    public static final int SHEET_H = BORDER + TITLE_TOP_PAD + TITLE_H + POOL_TOP_GAP
-            + STACK_H + POOL_BOTTOM_GAP + ROW_PRIMARY_H + PAD + BORDER;
+    public static int capacityFor(int usable) {
+        int c = (usable - CHROME_H + CARD_GAP) / (CARD_H + CARD_GAP);
+        return Math.max(Balance.Shop.OFFER, Math.min(MAX_CARDS, c));
+    }
 
     public final RectI panel = new RectI();
     public final RectI titleBar = new RectI();
-    public final RectI[] cards = {new RectI(), new RectI(), new RectI()};
+    public final RectI pool = new RectI();
+    public final RectI[] cards = boxes(MAX_CARDS);
     public final RectI next = new RectI();
+    /** 翻页箭头。{@link #pages} 为 1 时这两格是空矩形（{@code contains} 恒假），命中注册由面板负责。 */
+    public final RectI pagePrev = new RectI();
+    public final RectI pageNext = new RectI();
 
     public int contentLeft, contentRight, contentWidth;
+
+    /** 本次 {@link #layout} 算出的每页张数、页数、当前页、当前页第一张在全架里的下标、这一页实际摆几张。 */
+    public int capacity, pages, page, pageStart, shown;
+
+    private static RectI[] boxes(int n) {
+        RectI[] r = new RectI[n];
+        for (int i = 0; i < n; i++) r[i] = new RectI();
+        return r;
+    }
 
     /**
      * @param logicH     当前逻辑画布高
      * @param safeTop    顶部安全区内缩（逻辑 px）——商店常在矮屏刘海机上拉开，不能压进挖孔带
      * @param safeBottom 底部安全区内缩
+     * @param count      这次开架一共几张（回合店 3，暂停店整条非通用侧）
+     * @param page       请求的页；越界由这里钳，钳完的结果读 {@link #page}
      */
-    public void layout(int logicH, int safeTop, int safeBottom) {
+    public void layout(int logicH, int safeTop, int safeBottom, int count, int page) {
         int h = logicH <= 0 ? Screen.BATTLE_H : logicH;
         int bottom = h - safeBottom - PANEL_GAP;
         int usable = Math.max(0, bottom - safeTop - PANEL_GAP);
-        // 底边贴可用区下沿、顶边由内容决定。装不下时才长到贴满可用区，由下面的压卡分支收账。
-        panel.set(LEFT, bottom - Math.min(SHEET_H, usable), RIGHT, bottom);
+
+        capacity = capacityFor(usable);
+        pages = Math.max(1, (Math.max(0, count) + capacity - 1) / capacity);
+        this.page = Math.max(0, Math.min(page, pages - 1));
+        pageStart = this.page * capacity;
+        shown = Math.max(0, Math.min(capacity, count - pageStart));
+
+        // 底边贴可用区下沿、顶边由**这一页**的内容决定。装不下时才长到贴满可用区，由下面的压卡分支收账。
+        panel.set(LEFT, bottom - Math.min(sheetHeight(shown), usable), RIGHT, bottom);
         contentLeft = LEFT + BORDER + PAD;
         contentRight = RIGHT - BORDER - PAD;
         contentWidth = contentRight - contentLeft;
@@ -111,26 +160,40 @@ public final class ShopLayout {
         titleBar.set(contentLeft, titleTop, contentRight, titleTop + TITLE_H);
 
         int rowBottom = panel.bottom - BORDER - PAD;
-        int pw = primaryWidth();
-        int px = contentLeft + (contentWidth - pw) / 2;
-        next.set(px, rowBottom - ROW_PRIMARY_H, px + pw, rowBottom);
+        int rowTop = rowBottom - ROW_PRIMARY_H;
+        if (pages > 1) {
+            // 三格等宽：主次靠配色区分，不靠大小（{@link Widgets#equalHalves} 那条规矩的三格版）。
+            // 箭头不与出口比宽，玩家找的是中间那枚一直亮着的实心按钮。
+            for (int i = 0; i < PAGE_ROW_COLS; i++) {
+                RectI out = i == 0 ? pagePrev : i == 1 ? next : pageNext;
+                Widgets.gridCell(contentLeft, rowTop, contentWidth, ROW_PRIMARY_H,
+                        PAGE_ROW_COLS, 1, CARD_GAP, i, out);
+            }
+        } else {
+            int pw = primaryWidth();
+            int px = contentLeft + (contentWidth - pw) / 2;
+            next.set(px, rowTop, px + pw, rowBottom);
+            pagePrev.set(0, 0, 0, 0);
+            pageNext.set(0, 0, 0, 0);
+        }
 
         // 卡区从标题下面起、到按钮上面止，整组在池子里垂直居中：池子比内容高时多出来的是留白。
         int poolTop = titleBar.bottom + POOL_TOP_GAP;
         int poolBottom = next.top - POOL_BOTTOM_GAP;
         int avail = Math.max(0, poolBottom - poolTop);
+        pool.set(contentLeft, poolTop, contentRight, poolTop + avail);
         int cardH = CARD_H;
         int gap = CARD_GAP;
-        if (CARDS * cardH + (CARDS - 1) * gap > avail) {
-            // 极端比例叠上厚安全区时池子装不下三张整卡。压卡不压按钮——按钮是唯一的出口，
+        if (shown > 0 && shown * cardH + (shown - 1) * gap > avail) {
+            // 极端比例叠上厚安全区时池子装不下这一页的整卡。压卡不压按钮——按钮是唯一的出口，
             // 压掉的那几像素由说明带承担（说明是次要信息，出口不是）。收完间距还要**封顶在
             // CARD_H**：卡被挤完间距后反而比标准卡更高，那是"卡片封顶、富余量当留白"的反面。
             gap = 0;
-            cardH = Math.min(CARD_H, avail / CARDS);
+            cardH = Math.min(CARD_H, avail / shown);
         }
-        int stackH = CARDS * cardH + (CARDS - 1) * gap;
+        int stackH = shown > 0 ? shown * cardH + (shown - 1) * gap : 0;
         int top = poolTop + (avail - stackH) / 2;
-        for (int i = 0; i < CARDS; i++) {
+        for (int i = 0; i < shown; i++) {
             int y = top + i * (cardH + gap);
             cards[i].set(contentLeft, y, contentRight, y + cardH);
         }

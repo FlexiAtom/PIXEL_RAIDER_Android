@@ -34,6 +34,10 @@ public class ShopScreenTest {
      * {@code Game} 收到的是**一个 int**，靠区间分诊：{@code ACTION_NEXT} 与
      * {@code ACTION_BUY + 槽位} 必须永不相交。把 {@link ShopScreen#ACTION_BUY} 改成 1 之类的
      * "看起来一样"的重排，会让买卡分支永远走不到——真机上的表现是"点卡没反应"。
+     *
+     * <p>槽位的上界是**版面最多摆几张**（一页）而不是 {@code Balance.Shop.OFFER}：暂停店一屏能摆到
+     * 七张，按 3 留区间的话第七格会撞进下一个动作码。翻页不在这里——它由面板自己消化，
+     * {@code pressUp} 翻完页报 {@code ACTION_NONE}，所以动作码区间没有页那一档。
      */
     @Test
     public void actionCodesLeaveRoomForEverySlot() {
@@ -41,11 +45,11 @@ public class ShopScreenTest {
         assertTrue(ShopScreen.ACTION_NEXT != ShopScreen.ACTION_NONE);
         assertTrue("购买码是 ACTION_BUY + 槽位，所以它必须排在最后一个动作之后",
                 ShopScreen.ACTION_BUY > ShopScreen.ACTION_NEXT);
-        for (int slot = 0; slot < ShopLayout.CARDS; slot++) {
+        for (int slot = 0; slot < ShopLayout.MAX_CARDS; slot++) {
             assertTrue(ShopScreen.ACTION_BUY + slot != ShopScreen.ACTION_NEXT);
             assertTrue(ShopScreen.ACTION_BUY + slot != ShopScreen.ACTION_NONE);
         }
-        assertEquals("面板槽位数与规则端的一次上架数必须是同一个数",
-                Balance.Shop.OFFER, ShopLayout.CARDS);
+        assertTrue("版面一页至少要能摆下一次三选一，否则槽位数与动作码区间两头都对不上",
+                ShopLayout.MAX_CARDS >= Balance.Shop.OFFER);
     }
 }
