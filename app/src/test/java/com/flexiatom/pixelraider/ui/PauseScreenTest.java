@@ -76,7 +76,8 @@ public class PauseScreenTest {
     @Test
     public void actionCodesDoNotCollide() {
         int[] codes = {PauseScreen.ACTION_NONE, PauseScreen.ACTION_RESUME,
-                PauseScreen.ACTION_SETTINGS, PauseScreen.ACTION_RESTART, PauseScreen.ACTION_MENU};
+                PauseScreen.ACTION_SETTINGS, PauseScreen.ACTION_RESTART, PauseScreen.ACTION_MENU,
+                PauseScreen.ACTION_SHOP};
         assertEquals(0, PauseScreen.ACTION_NONE);
         for (int i = 0; i < codes.length; i++) {
             for (int j = i + 1; j < codes.length; j++) {
@@ -87,28 +88,29 @@ public class PauseScreenTest {
 
     /**
      * 出口表的下标对应与"亮着必须有真动作"（2026-09-29 授权补，配套 {@code EXIT_LIVE}/
-     * {@code EXIT_ACTION} 放宽到包内可见）。
+     * {@code EXIT_ACTION} 放宽到包内可见；2026-10-01 的 B3 把商店入口插进第二行最左格）。
      *
      * <p>钉三件事，全都是只改一行就能撞上的形态：
-     * ① 两张表与 {@code PauseLayout} 的五枚出口同长——错一格就是把某枚出口的灰度配到了别人身上；
-     * ② 灰度位与那三个具名布尔逐格对齐——{@code EXIT_LIVE} 里把 {@code MENU_LIVE} 写到 1 号格，
-     *    画面上是"成就"能点而"返回主菜单"是灰的，JVM 与真机都不报错；
+     * ① 两张表与 {@code PauseLayout} 的六枚出口同长——错一格就是把某枚出口的灰度配到了别人身上；
+     * ② 灰度位与那四个具名布尔逐格对齐——{@code EXIT_LIVE} 里把 {@code MENU_LIVE} 写到 1 号格，
+     *    画面上是"升级商店"能点而"返回主菜单"是灰的，JVM 与真机都不报错；
      * ③ 亮着的出口必须带真动作码——那句 javadoc 说"落地一个就把布尔翻成 true 并给真动作"，
      *    只翻布尔的结果是一颗淡入完成、按下去什么都不做的按钮（最恶性的是主操作那颗：
      *    {@code openPause} 已经把时钟冻住，出口全空就等于把玩家永久冻在面板上）。
      */
     @Test
     public void liveExitsAlwaysCarryARealActionAndGreyOnesLineUpWithTheirFlags() {
-        // 五枚 = 继续作战/成就/设置/重开本局/返回主菜单，与 PauseLayout 那五个框一一对应
-        // （drawn(i) 的 switch 是那条映射，drawnExitRectsNeverOverlap 逐框列了同样的五个）
-        assertEquals(5, PauseScreen.EXIT_ACTION.length);
+        // 六枚 = 继续作战/升级商店/成就/设置/重开本局/返回主菜单，与 PauseLayout 那六个框一一对应
+        // （drawn(i) 的 switch 是那条映射，drawnExitRectsNeverOverlap 逐框列了同样的六个）
+        assertEquals(6, PauseScreen.EXIT_ACTION.length);
         assertEquals(PauseScreen.EXIT_ACTION.length, PauseScreen.EXIT_LIVE.length);
 
         assertTrue("主操作不许被灰度掉：那是面板上唯一的解冻路", PauseScreen.EXIT_LIVE[0]);
-        assertEquals(PauseScreen.ACHIEVEMENTS_LIVE, PauseScreen.EXIT_LIVE[1]);
-        assertEquals(PauseScreen.SETTINGS_LIVE, PauseScreen.EXIT_LIVE[2]);
-        assertTrue("重开本局是第二条解冻路", PauseScreen.EXIT_LIVE[3]);
-        assertEquals(PauseScreen.MENU_LIVE, PauseScreen.EXIT_LIVE[4]);
+        assertEquals(PauseScreen.SHOP_LIVE, PauseScreen.EXIT_LIVE[1]);
+        assertEquals(PauseScreen.ACHIEVEMENTS_LIVE, PauseScreen.EXIT_LIVE[2]);
+        assertEquals(PauseScreen.SETTINGS_LIVE, PauseScreen.EXIT_LIVE[3]);
+        assertTrue("重开本局是第二条解冻路", PauseScreen.EXIT_LIVE[4]);
+        assertEquals(PauseScreen.MENU_LIVE, PauseScreen.EXIT_LIVE[5]);
 
         for (int i = 0; i < PauseScreen.EXIT_LIVE.length; i++) {
             if (PauseScreen.EXIT_LIVE[i]) {
@@ -119,7 +121,7 @@ public class PauseScreenTest {
     }
 
     /**
-     * 五枚出口的**绘制框**在任何逻辑高上都不互相压。
+     * 六枚出口的**绘制框**在任何逻辑高上都不互相压。
      *
      * 这条是"按下先认绘制框、再认外扩框"那套两遍解析的前提：外扩到 48dp 之后行与行必然互压
      * （实测 40 逻辑像素的 touch floor 下压掉 18 格，而行间距只有 22 格），互压那一带归谁，
@@ -139,7 +141,8 @@ public class PauseScreenTest {
     }
 
     private static void assertExitsDisjoint(PauseLayout box, int logicH) {
-        RectI[] drawn = {box.resume, box.achievements, box.settings, box.restart, box.menu};
+        // 顺序 = drawn(i) 的 switch 顺序 = EXIT_ACTION 的下标顺序，三处手工对齐（见那条 javadoc）
+        RectI[] drawn = {box.resume, box.shop, box.achievements, box.settings, box.restart, box.menu};
         for (int i = 0; i < drawn.length; i++) {
             for (int j = i + 1; j < drawn.length; j++) {
                 assertTrue("logicH=" + logicH + " 第 " + i + " 与第 " + j + " 枚出口压上了",

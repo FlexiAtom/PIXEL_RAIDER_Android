@@ -52,10 +52,31 @@ public class PauseLayoutTest {
         assertRect("card1", l.cards[1], 122, 128, 226, 152);
         assertRect("card7", l.cards[7], 122, 212, 226, 236);
         assertRect("resume", l.resume, 39, 242, 200, 264);
-        assertRect("achievements", l.achievements, 14, 268, 116, 286);
-        assertRect("settings", l.settings, 124, 268, 226, 286);
+        assertRect("shop", l.shop, 14, 268, 82, 286);
+        assertRect("achievements", l.achievements, 86, 268, 154, 286);
+        assertRect("settings", l.settings, 158, 268, 226, 286);
         assertRect("restart", l.restart, 14, 290, 116, 308);
         assertRect("menu", l.menu, 124, 290, 226, 308);
+    }
+
+    /**
+     * 第二行三格：每格 68 宽，**中间那枚的字心正落在内容列中线上**。
+     *
+     * <p>这一行只有文字、没有边框，三格里唯一能被眼睛挑出来的错位就是中间那枚偏了。间隙若走
+     * {@link PauseLayout#BUTTON_GAP}(8)，212 会切成 65/65/66，中格中心落在 119 而不是 120——
+     * 差的就是一格，而这一格没有任何一条别的断言能发现。
+     */
+    @Test
+    public void secondaryRowIsThreeEqualCellsWithTheMiddleOneDeadCentre() {
+        l.layout(320, 0, 0);
+        assertEquals(68, l.shop.width());
+        assertEquals(68, l.achievements.width());
+        assertEquals(68, l.settings.width());
+        assertEquals(l.contentLeft + l.contentWidth / 2, l.achievements.centerX());
+        assertEquals(l.contentLeft, l.shop.left);
+        assertEquals(l.contentRight, l.settings.right);
+        assertEquals(l.shop.bottom, l.achievements.bottom);
+        assertEquals(l.achievements.bottom, l.settings.bottom);
     }
 
     /**
@@ -139,8 +160,8 @@ public class PauseLayoutTest {
                 assertTrue(h + " tab 压住图表", l.tabs[2].bottom <= l.chart.top);
                 assertTrue(h + " 卡片压住图表", l.cards[0].top >= l.chart.bottom);
                 assertTrue(h + " 卡片压住按钮", l.cards[7].bottom <= l.resume.top);
-                assertTrue(h + " 按钮行互压", l.resume.bottom <= l.achievements.top
-                        && l.settings.bottom <= l.restart.top);
+                assertTrue(h + " 按钮行互压", l.resume.bottom <= l.shop.top
+                        && l.achievements.bottom <= l.restart.top);
                 assertTrue(h + " 末行贴出面板底", l.menu.bottom <= l.panel.bottom - PauseLayout.BORDER);
             }
         }
@@ -158,17 +179,18 @@ public class PauseLayoutTest {
     }
 
     private RectI[] grouped() {
-        RectI[] all = new RectI[2 + l.tabs.length + PauseLayout.CARDS + 5];
+        RectI[] all = new RectI[2 + l.tabs.length + PauseLayout.CARDS + 6];
         all[0] = l.titleBar;
         all[1] = l.chart;
         System.arraycopy(l.tabs, 0, all, 2, l.tabs.length);
         int at = 2 + l.tabs.length;
         System.arraycopy(l.cards, 0, all, at, PauseLayout.CARDS);
         all[at + PauseLayout.CARDS] = l.resume;
-        all[at + PauseLayout.CARDS + 1] = l.achievements;
-        all[at + PauseLayout.CARDS + 2] = l.settings;
-        all[at + PauseLayout.CARDS + 3] = l.restart;
-        all[at + PauseLayout.CARDS + 4] = l.menu;
+        all[at + PauseLayout.CARDS + 1] = l.shop;
+        all[at + PauseLayout.CARDS + 2] = l.achievements;
+        all[at + PauseLayout.CARDS + 3] = l.settings;
+        all[at + PauseLayout.CARDS + 4] = l.restart;
+        all[at + PauseLayout.CARDS + 5] = l.menu;
         return all;
     }
 }

@@ -50,11 +50,19 @@ public final class PauseLayout {
     public static final int CARDS = CARD_ROWS * CARD_COLS;
     public static final int CELL_GAP = 4;
 
-    /** 三级按钮：继续作战（独占一行）→ 成就/设置 → 重开/返回主菜单。 */
+    /** 三级按钮：继续作战（独占一行）→ 升级商店/成就/设置 → 重开/返回主菜单。 */
     public static final int ROW_PRIMARY_H = 22;
     public static final int ROW_H = 18;
     public static final int ROW_GAP = 4;
     public static final int BUTTON_GAP = 8;
+    /**
+     * 第二行的格数。三格用 {@link #CELL_GAP} 而不是 {@link #BUTTON_GAP}：内容列宽 212 只有
+     * {@code 3×68 + 2×4} 这一种整除分法，按 8 的间隙切出来是 65/65/66——末格吸收余项会让
+     * **中间那枚的字心偏离内容列中线一格**，而这一行只有文字没有边框，读者能挑出来的就只剩偏心。
+     * 同一道算术在 {@code ShopLayout.PAGE_ROW_COLS} 那行也成立，两处的三格因此是同一个宽度。
+     * 68 这一格在 12px 汉字下是**五字封顶**，这一行最长的标签是「升级商店」四字。
+     */
+    public static final int SECONDARY_COLS = 3;
     /** 主操作占内容宽的 76%（规格 §四）。 */
     public static final float PRIMARY_W_RATIO = 0.76f;
 
@@ -88,6 +96,7 @@ public final class PauseLayout {
             new RectI(), new RectI(), new RectI(), new RectI()
     };
     public final RectI resume = new RectI();
+    public final RectI shop = new RectI();
     public final RectI achievements = new RectI();
     public final RectI settings = new RectI();
     public final RectI restart = new RectI();
@@ -122,7 +131,11 @@ public final class PauseLayout {
         int row1Bottom = row2Top - ROW_GAP;
         int row1Top = row1Bottom - ROW_PRIMARY_H;
         Widgets.equalHalves(contentLeft, row3Top, contentWidth, ROW_H, BUTTON_GAP, restart, menu);
-        Widgets.equalHalves(contentLeft, row2Top, contentWidth, ROW_H, BUTTON_GAP, achievements, settings);
+        for (int i = 0; i < SECONDARY_COLS; i++) {
+            RectI out = i == 0 ? shop : i == 1 ? achievements : settings;
+            Widgets.gridCell(contentLeft, row2Top, contentWidth, ROW_H,
+                    SECONDARY_COLS, 1, CELL_GAP, i, out);
+        }
         int pw = primaryWidth();
         int px = contentLeft + (contentWidth - pw) / 2;
         resume.set(px, row1Top, px + pw, row1Bottom);

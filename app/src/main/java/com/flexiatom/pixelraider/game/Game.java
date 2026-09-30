@@ -780,12 +780,18 @@ public final class Game implements GameThread.Host {
     }
 
     /**
-     * 暂停面板报上来的出口动作：只有"继续作战""重开本局""返回主菜单"三个出口现在真的活着——
+     * 暂停面板报上来的出口动作：只有"继续作战""升级商店""重开本局""返回主菜单"四个出口现在真的活着——
      * 未落地的出口在 {@code PauseScreen.EXIT_LIVE} 里就已被剔除，压根报不出动作码。
+     *
+     * <p>商店那一枚走 {@link #openShop}(ENTRY_PAUSE)：SHOP 压在 PAUSE 之上，关店只 pop 一层，
+     * 玩家回到的是**同一块**暂停面板、同一个定格时钟（{@code pauseAtUi} 不动，面板重新画出来时
+     * 入场进度早已是 1，不会再落一次）。
      */
     private void onPanelPointerUp(int action) {
         if (action == PauseScreen.ACTION_RESUME) {
             closePause();
+        } else if (action == PauseScreen.ACTION_SHOP) {
+            openShop(ShopRules.ENTRY_PAUSE);
         } else if (action == PauseScreen.ACTION_RESTART) {
             // 出口一级化（规格 §四）：重开直接生效，没有二次确认弹窗
             restartFade = 1f;

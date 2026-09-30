@@ -44,6 +44,8 @@ public final class PauseScreen {
     public static final int ACTION_SETTINGS = 2;
     public static final int ACTION_RESTART = 3;
     public static final int ACTION_MENU = 4;
+    /** 暂停页里的商店入口（B3）。码值排在既有四个之后：{@code Game} 用 if-else 链比它，不与任何码相撞。 */
+    public static final int ACTION_SHOP = 5;
     /** 换 tab 在面板内部就地生效，从不报给调用方，所以这里**没有** ACTION_TAB。 */
 
     /**
@@ -55,11 +57,13 @@ public final class PauseScreen {
     static final boolean ACHIEVEMENTS_LIVE = false;
     static final boolean SETTINGS_LIVE = false;
     static final boolean MENU_LIVE = true;      // 2026-09-29 授权摘灰：宿主 openMenu 已在，动作分支同批接上
+    static final boolean SHOP_LIVE = true;      // 商店本体在 B1/B2，这一枚是它的暂停页入口
 
     private static final String L_TITLE = "作战暂停";
     private static final String L_SAMPLING = "采样中…";
     private static final String L_WAVE = "波次";
     private static final String L_RESUME = "继续作战";
+    private static final String L_SHOP = "升级商店";
     private static final String L_ACHIEVEMENTS = "成就";
     private static final String L_SETTINGS = "设置";
     private static final String L_RESTART = "重开本局";
@@ -82,21 +86,23 @@ public final class PauseScreen {
     private final PauseLayout box = new PauseLayout();
     private final HudText hud = new HudText(32);
     private final RectI[] tabHit = {new RectI(), new RectI(), new RectI()};
-    /** 五枚出口的**外扩命中框**（48dp 标准），下标对齐 {@link #EXIT_ACTION}。同时是按压区的判定框。 */
-    private final RectI[] exitHit = {new RectI(), new RectI(), new RectI(), new RectI(), new RectI()};
+    /** 六枚出口的**外扩命中框**（48dp 标准），下标对齐 {@link #EXIT_ACTION}。同时是按压区的判定框。 */
+    private final RectI[] exitHit = {
+            new RectI(), new RectI(), new RectI(), new RectI(), new RectI(), new RectI()
+    };
     private final PressSelector press = new PressSelector();
     /** 包内可见只为测试（{@code PauseScreenTest} 钉它与 {@link #EXIT_LIVE} 的下标对应）；对外仍然只报动作码。 */
     static final int[] EXIT_ACTION =
-            {ACTION_RESUME, ACTION_NONE, ACTION_SETTINGS, ACTION_RESTART, ACTION_MENU};
-    /** 每枚出口属于第几级（成就与设置同属第二级，规格 §四 的级联顺序）。 */
-    private static final int[] EXIT_LEVEL = {0, 1, 1, 2, 2};
+            {ACTION_RESUME, ACTION_SHOP, ACTION_NONE, ACTION_SETTINGS, ACTION_RESTART, ACTION_MENU};
+    /** 每枚出口属于第几级（第二行那三枚同属一级，规格 §四 的级联按**行**延后，不按枚）。 */
+    private static final int[] EXIT_LEVEL = {0, 1, 1, 1, 2, 2};
     /**
-     * 未落地的出口在这里就整条剔除（既不响应也不淡入）。成就属 S5、设置属 S4-c 第三段、
-     * 主菜单属 S4-c 后段——落地一个就把对应布尔翻成 true，并给 {@link #EXIT_ACTION} 那格真动作。
+     * 未落地的出口在这里就整条剔除（既不响应也不淡入）。成就属 S5、设置属 S4-c 第三段——
+     * 落地一个就把对应布尔翻成 true，并给 {@link #EXIT_ACTION} 那格真动作。
      * 这最后一句是契约，不是建议：{@code PauseScreenTest} 现在钉着"亮着的出口必须带真动作"。
      */
     static final boolean[] EXIT_LIVE =
-            {true, ACHIEVEMENTS_LIVE, SETTINGS_LIVE, true, MENU_LIVE};
+            {true, SHOP_LIVE, ACHIEVEMENTS_LIVE, SETTINGS_LIVE, true, MENU_LIVE};
     private int canvasH = Screen.BATTLE_H;
     private int tab = TrendSampler.TAB_KILLS;
 
@@ -123,7 +129,7 @@ public final class PauseScreen {
      * 按下。面板**吃掉**落在它上面的每一击（绝不让点击漏到走位上去），所以命中与否不需要报给调用方。
      *
      * <p>只有换 tab 在这里就地生效——它改的是"看哪条曲线"，没有可撤销的后果，按下就该有反馈。
-     * 五枚出口**只登记按压态、不执行**：动作留到 {@link #pressUp}，滑出去就取消
+     * 六枚出口**只登记按压态、不执行**：动作留到 {@link #pressUp}，滑出去就取消
      * （"重开本局"作废本局，不可逆）。
      *
      * @param elapsed 进入暂停以来的界面秒数——位移与级联都从它算，不缓存上一帧的值
@@ -170,9 +176,10 @@ public final class PauseScreen {
     public RectI drawn(int i) {
         switch (i) {
             case 0: return box.resume;
-            case 1: return box.achievements;
-            case 2: return box.settings;
-            case 3: return box.restart;
+            case 1: return box.shop;
+            case 2: return box.achievements;
+            case 3: return box.settings;
+            case 4: return box.restart;
             default: return box.menu;
         }
     }
@@ -370,14 +377,16 @@ public final class PauseScreen {
     private void drawExits(Canvas c, float elapsed) {
         int on = press.pressed();
         drawResumeButton(c, PanelMotion.buttonProgress(0, elapsed), elapsed, on == 0);
+        drawFlatButton(c, box.shop, L_SHOP,
+                PanelMotion.buttonProgress(1, elapsed), SHOP_LIVE, false, on == 1);
         drawFlatButton(c, box.achievements, L_ACHIEVEMENTS,
-                PanelMotion.buttonProgress(1, elapsed), ACHIEVEMENTS_LIVE, false, on == 1);
+                PanelMotion.buttonProgress(1, elapsed), ACHIEVEMENTS_LIVE, false, on == 2);
         drawFlatButton(c, box.settings, L_SETTINGS,
-                PanelMotion.buttonProgress(1, elapsed), SETTINGS_LIVE, false, on == 2);
+                PanelMotion.buttonProgress(1, elapsed), SETTINGS_LIVE, false, on == 3);
         drawFlatButton(c, box.restart, L_RESTART,
-                PanelMotion.buttonProgress(2, elapsed), true, false, on == 3);
+                PanelMotion.buttonProgress(2, elapsed), true, false, on == 4);
         drawFlatButton(c, box.menu, L_MENU,
-                PanelMotion.buttonProgress(2, elapsed), MENU_LIVE, true, on == 4);
+                PanelMotion.buttonProgress(2, elapsed), MENU_LIVE, true, on == 5);
     }
 
     /**
