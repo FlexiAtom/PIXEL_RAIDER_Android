@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.flexiatom.pixelraider'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.flexiatom.pixelraider'
+        minSdk 23
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    buildTypes {
+        debug {
+            // 保留行号供帧诊断；不做 minify，避免反射路径与帧内热点被改写
+            minifyEnabled false
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = false
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+    // 规格 §零：AndroidX 只保留这两个（挖孔/手势条安全区 + OnBackPressedDispatcher）。
+    // 版本钉在 1.17.0/1.12.x：core 1.18+ 要求 compileSdk 37 且会拖进 core-ktx，
+    // 与规格的 compileSdk 36 冲突。注：AndroidX 自身由 Kotlin 编写，kotlin-stdlib 作为
+    // 传递依赖无法避免——"无 Kotlin"约束的是不写 Kotlin 源码，不是不接受其运行时。
+    implementation 'androidx.core:core:1.17.0'
+    implementation 'androidx.activity:activity:1.12.0'
+
+    testImplementation 'junit:junit:4.13.2'
+}

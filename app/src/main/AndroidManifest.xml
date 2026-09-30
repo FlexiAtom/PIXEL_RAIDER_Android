@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- 规格 §一：hit-stop 同步触发一次重击震动（设置页可关） -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- S6 音频总线用 -->
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <application
+        android:allowBackup="false"
+        android:hasFragileUserData="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="false"
+        android:theme="@style/Theme.PixelRaider"
+        tools:targetApi="36">
+
+        <!-- singleTop：全局只该有一个 MainActivity。Game 是 Activity 的 final 字段，叠第二个实例
+             等于开第二局；不用 singleTask 是因为它的 clear-top 会改掉页间导航语义。 -->
+        <activity
+            android:name=".plat.MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|navigation|density|uiMode"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.PixelRaider"
+            tools:ignore="DiscouragedApi,LockedOrientationActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>
