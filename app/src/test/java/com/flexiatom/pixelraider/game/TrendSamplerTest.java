@@ -1,4 +1,5 @@
 /*
+ * SPDX-License-Identifier: AGPL-3.0-or-later
  * PIXEL RAIDER — 原生 Android 纵版弹幕射击
  * Copyright (C) 2026 FlexiAtom
  *
