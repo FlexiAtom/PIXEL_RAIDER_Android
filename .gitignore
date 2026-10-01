@@ -19,6 +19,30 @@ build/
 .gradle/
 local.properties
 
-# 协议入口与工具目录（本机，不入库）
-AGENTS.md
+# 文档与非源码扩展名默认不入库——以后新补的笔记／导出物不会被无声漏掉。
+# 他逐字（2026-10-01）：「把 .md .txt .xml .gradle .gradlew .bat 加进去，但要排除
+# LICENSE、README、AGENTS、.editorconfig 之类，不然以后补的文件又要漏掉一次」。
+*.md
+*.txt
+*.xml
+*.gradle
+*.bat
+gradlew
+
+# ⚠ 上面这四条例外与下面那条旧规**撞车**，靠 gitignore「后写覆盖先写」定胜负：
+# !AGENTS* 在这里先放行，AGENTS.md 在文件末尾再收掉 ⇒ 协议入口仍然不入库（旧规
+# 「本机，不入库」没被这条新指令无声推翻）。要它入库就删掉末尾那一行，别改这里。
+!LICENSE*
+!README*
+!AGENTS*
+!.editorconfig
+
+# 工具目录（本机，不入库）
 .qoder/
+
+# ⚠ 如实登记这条的副作用：忽略只对**未追踪**的文件生效，现存 146 个追踪文件一个都不掉；
+# 但以后新增的 .xml 资源／.gradle 脚本／.bat 会被无声忽略，那时要么 `git add -f`，
+# 要么在上面补一条例外。这个风险是他这条指令的必然代价，我不擅自收窄。
+
+# 协议入口（本机，不入库）——必须排在 !AGENTS* 之后才生效
+AGENTS.md
