@@ -141,6 +141,58 @@ public final class ShopRun {
         return Math.round(Balance.shop.hullPerLevel * levelOf(Balance.ShopCard.HULL));
     }
 
+    // ---- 簇 II：导弹机制卡（2026-10-01 实现授权）--------------------------------------------
+    // 这四个读数都是**导引参数的增量**，不是乘子也不是百分比：它们要和 Balance.Missile 里的
+    // 出厂值相加，而相加的位置只有一处（MissileBehavior.beginFrame 每帧解析有效值）。
+
+    /** 中段引导是**买断**卡（{@code midCourseMaxLevel = 1}），所以这里只有"有没有"、没有"几级"。 */
+    public boolean midCourseOn() {
+        return levelOf(Balance.ShopCard.MID_COURSE) > 0;
+    }
+
+    /**
+     * 二次点火开关：这张卡**第一级买的是机制本身**（锁定瞬间再点一次火），后面两级才是半径。
+     *
+     * <p>它不是出厂行为——他的原话 L14750「锁定最近的目标，再次点火」在 L41661 被自己加了括号
+     * 「如果没有二次点火卡就没有再次点火」，所以 {@code Balance.Missile} 里那个
+     * {@code reIgnitionOnAcquire} 布尔已删：商品位只从这里读。
+     */
+    public boolean reIgnitionOn() {
+        return levelOf(Balance.ShopCard.IGNITION) > 0;
+    }
+
+    /** 导引头视场半径的增量（px），来自二次点火卡：+25/级 ×3。 */
+    public float seekerRangeBonus() {
+        return Balance.shop.seekerRangePerLevel * levelOf(Balance.ShopCard.IGNITION);
+    }
+
+    /** 最大可用过载的增量（px/s²），来自机动过载卡：+370/级 ×4。 */
+    public float latAccelBonus() {
+        return Balance.shop.latAccelPerLevel * levelOf(Balance.ShopCard.HANDLING);
+    }
+
+    /**
+     * 视场**总夹角**的增量（度），来自机动过载卡：+6°/级 ×4 ⇒ 60°→84°。
+     *
+     * <p>这里给的是整角，折半在解析点做（{@code MissileBehavior.beginFrame}）：他「收」的那句
+     * 口径是「圆心角 84°」，卡面也按整角印，半角只是实现里的比较量。
+     */
+    public float seekerArcDegBonus() {
+        return Balance.shop.seekerArcDegPerLevel * levelOf(Balance.ShopCard.HANDLING);
+    }
+
+    /**
+     * 格斗导弹（簇 II 第四件）：同样是**买断**卡，所以这里只有"有没有"、没有"几级"。
+     *
+     * <p>⚠ 这个开关只回答"要不要开那条发射判据"，**不改任何导引参数**：格斗弹那六个
+     * {@code dogfight*} 字段全在 {@code Balance.Missile} 里，一张卡买断之后没有等级可叠，
+     * 于是"卡面数字"与"结算读数"两件事在它身上都不存在（{@code ShopRules.perLevelOf}
+     * 对它返回 0 是同一条）。
+     */
+    public boolean dogfightOn() {
+        return levelOf(Balance.ShopCard.DOGFIGHT) > 0;
+    }
+
     private float mul(int cardId, float perLevel) {
         return 1f + perLevel * levelOf(cardId);
     }

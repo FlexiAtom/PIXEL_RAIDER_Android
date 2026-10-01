@@ -29,7 +29,7 @@ import org.junit.Test;
 /**
  * 导弹仿真（提案 missile-warhead-sim §1.1–§1.3）。
  *
- * <p>这里钉的是四件"错了不会被任何别的东西发现"的事：
+ * <p>这里钉的是五件"错了不会被任何别的东西发现"的事：
  * <ul>
  *   <li><b>两段视野的角度语义</b>——雷达 90° / 导引头 60° 都按**总夹角**算。导引头那边他的原话只到
  *       「以导弹正对方向60度夹角为导弹视场」（L14750 {@code feedback}，UTC 2026-09-25T09:19:51.727Z
@@ -44,6 +44,9 @@ import org.junit.Test;
  *   <li><b>派生互斥没有可泄漏的状态</b>（§1.1）：七条完毕态逐条走一遍，每条之后下一枚弹必须
  *       还能锁上同一个目标。这条是"用计数器就会漏"的那一类风险的替代品——它现在测的是
  *       "位图里不该留下上一代的戳"。</li>
+ *   <li><b>第二条流（格斗弹）的锁语义</b>（簇 II C2，第九节）。它与普通弹共用 {@code advance}
+ *       的躯干，分开的是三件事：锁什么时候给（发射那一刻由火控装配）、给完还换不换（全程不换）、
+ *       空了怎么收场（同帧自爆）。三件都是<b>画面上看不出来</b>的那种错，所以整节都在钉这三件。</li>
  * </ul>
  *
  * <p><b>归属记法</b>：上面与本文件各方法注释里的 L147xx 一律是**对话 transcript 的记录行号**
@@ -69,6 +72,22 @@ public final class MissileBehaviorTest {
     private final Missiles pool = new Missiles(4);
     private final Enemies foes = new Enemies(ENEMY_CAP);
     private final MissileBehavior beh = new MissileBehavior(ENEMY_CAP);
+    /**
+     * 第二条流的那一对：池与行为各自一套，**占用戳也各自一套**（"弹体池分家"，L37356）。
+     * 分家的全部意义就是这两格字段：一只敌机同时挂普通弹的一锁＋二锁＋格斗锁是工程设计，
+     * 共用一个 {@code MissileBehavior} 实例的话，第三条锁会被前两条的戳挡掉。
+     */
+    private final Missiles dogPool = new Missiles(8);
+    private final MissileBehavior dog = new MissileBehavior(ENEMY_CAP, MissileBehavior.STREAM_DOGFIGHT);
+    /**
+     * 本局持有量。JUnit 每个 {@code @Test} 新建一次测试类实例 ⇒ 每个用例都从"一张卡都没买"起步，
+     * 出厂有效值就是 {@link Balance.Missile} 里的原值（簇 II 的四把钥匙全零）。
+     *
+     * <p>⚠ 导引头的半径、视场、过载、再点火、中段引导**都从这里解析**（{@code beginFrame} 单点），
+     * 所以任何用例想测"涨了的那一侧"，就在自己方法里 {@code run.buyUpgrade(...)}——不要去改
+     * {@link #spec}：它是可变静态，改了会串到同 JVM 的别的测试。
+     */
+    private final ShopRun run = new ShopRun();
 
     // ---- 一、射前雷达（半角 45°、锥轴恒为屏幕正上方）------------------------------------------
 
@@ -165,6 +184,118 @@ public final class MissileBehaviorTest {
                 cos < 0.999f);
     }
 
+    /**
+     * 「中段引导」买的是**闭眼段也会转向**（逐字「中段引导卡是独立新卡」，与 L41661 第四条
+     * 「二次点火卡附加和过载卡新增…的作用」同批）。它是
+     * {@link #theBindSegmentFollowsTheLaunchUnitNotTheEnemy} 的反面：同一条几何，那条弹轴一路
+     * 钉死在出膛那一帧，这条每帧都在拐。
+     *
+     * <p>⚠ 两条边界必须同时钉住，否则这张卡会顺带改掉 mode0 的两半设计：
+     * <ul>
+     *   <li><b>不占目标</b>——装订只回答"往哪飞"。转向一旦写 {@code targetSlot}，互斥就被提前到
+     *       开眼之前，"多枚弹朝同一只飞、进圈才竞争"那半条设计就没了。</li>
+     *   <li><b>不开眼</b>——扫描门仍然只看 {@link Missiles.Missile#seekerOpen}（L41661 第一行
+     *       「抵达发射单元描述的位置后扫描」）。这张卡卖的是"别再直飞"，不是"提前索敌"。</li>
+     * </ul>
+     *
+     * <p>每一步的转角压在过载闸里（闸按 {@code advance} 同一式子从**上一步的速率**算，不取
+     * {@code stallSpeed} 那个宽松上界）。那是必然成立的不变式，不是这条的判别式——判别式是累计转角：
+     * 实测买了之后 24 帧累计 <b>6.43°</b>，没买同一条几何是 <b>3.7e-5°</b>（＝钉死）。
+     */
+    @Test
+    public void theMidCourseCardBendsTheBlindSegmentWithoutTakingTheTarget() {
+        run.buyUpgrade(Balance.ShopCard.MID_COURSE);                // 买断卡，一级即生效
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy e = bearingUp(START_X, START_Y, 25f, 200f);
+        e.vx = 90f;                                                 // 一路横移 ⇒ 视线角速率恒为正
+        frame(m);                                                   // 射前雷达装订
+        assertTrue("这条用例的前提（已装订）没成立", m.unitSet);
+        assertEquals("装订段占了目标", Missiles.Missile.NO_TARGET, m.targetSlot);
+        float total = 0f;
+        int frames = 0;
+        while (!m.seekerOpen && frames < 24) {
+            e.x += e.vx * STEP;
+            float vFloor = Math.max(speed(m), spec.stallSpeed);     // 与 advance 里那道分母同式
+            float gate = spec.maxLatAccel / vFloor * STEP;          // 没买过载卡 ⇒ 闸就是出厂那道
+            float before = (float) Math.atan2(m.vy, m.vx);
+            int flags = frame(m);
+            frames++;
+            assertEquals("闭眼段锁上了目标 ⇒ 中段引导顺带把扫描门也打开了",
+                    0, flags & (MissileBehavior.FLAG_ACQUIRED | MissileBehavior.FLAG_RELOCKED));
+            assertEquals("闭眼段占了目标 ⇒ 互斥被提前到开眼之前",
+                    Missiles.Missile.NO_TARGET, m.targetSlot);
+            float turned = Math.abs(angleDelta(m.vx, m.vy,
+                    (float) Math.cos(before), (float) Math.sin(before)));
+            assertTrue("第 " + frames + " 帧一步转了 " + Math.toDegrees(turned) + "°，超过过载闸 "
+                    + Math.toDegrees(gate) + "° ⇒ 导引绕过了限幅", turned <= gate + 1e-4f);
+            total += turned;
+        }
+        assertTrue("跑了 " + frames + " 帧弹轴纹丝不动 ⇒ 这张卡和没买一样",
+                total > Math.toRadians(3f));
+        // 只排除"拐到别处去"：装订那一刻弹轴本来就先扣了一个提前量（CV 拦截点在目标前方，
+        // 这条几何实测约 11°），所以末帧还差十来度是**对的**；20° 这个上界钉的是"没拐飞"，
+        // 它不是这条用例的判别式（判别式是上面那个累计转角）。
+        float lead = Math.abs(losOffset(m, e));
+        assertTrue("末帧弹轴离装订的那只 " + Math.toDegrees(lead) + "° ⇒ 转是转了，转的不是朝着它",
+                lead < Math.toRadians(20f));
+    }
+
+    /**
+     * 装订点**逐帧重解**（{@code reunit}）到底买到了什么：匀速飞的目标，它的 CV 拦截点在空间上
+     * 近似不动，刷不刷都一样——所以这条必须先给目标一次**变速**（横摆怪每半个正弦换一次方向），
+     * 才看得出差别。变速之后装订点必须跟着走，否则 ④ 那道开眼门会在等一个早已过期的圆心，
+     * 买卡反而更晚开眼（{@code reunit} 的注释写的就是这件事）。
+     *
+     * <p>⚠ 断言的是**位移量级**而不是"恰好等于新圆心"：新圆心由 {@code leadTime} 递推解出，
+     * 拿测试自己再解一遍就是拿被测函数算期望值。这里只钉"跟着变速走了至少 8px"——变速 −240px/s
+     * 乘上还剩的零点几秒，量级在几十 px，而没刷新的那一支会停在旧圆心上（差 0）。
+     */
+    @Test
+    public void theMidCourseCardResolvesTheBoundPointAgainWhenTheTargetChangesVelocity() {
+        run.buyUpgrade(Balance.ShopCard.MID_COURSE);
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy e = bearingUp(START_X, START_Y, 25f, 200f);
+        e.vx = 90f;
+        frame(m);
+        assertTrue("前提：这一枚已经装订上了", m.unitSet);
+        float staleX = m.unitX;
+        e.vx = -150f;                                               // 换向：CV 外推的整个未来都变了
+        e.x += e.vx * STEP;
+        frame(m);
+        assertTrue("变速之后装订点还钉在旧圆心 ⇒ 开眼门在等一个已经不存在的位置（"
+                        + staleX + " → " + m.unitX + "）",
+                Math.abs(m.unitX - staleX) > 8f);
+        assertEquals("装订段顺手占了目标", Missiles.Missile.NO_TARGET, m.targetSlot);
+    }
+
+    /**
+     * 装订与锁定是**两个生命周期**：{@code boundSlot} 失效只清自己，绝不碰 {@code targetSlot}。
+     * 写错的那一版（两条清理路径合并）会让开眼段"锁上了又立刻掉"——{@code boundTarget} 的注释
+     * 点名的就是这个。
+     *
+     * <p>⚠ 下面这个状态**今天到不了**（开过眼就不会再闭，而 {@code boundTarget} 只在闭眼段被读），
+     * 它是把两条清理路径分开的唯一构造：装订的那只打死、同时 {@code targetSlot} 指向另一只还活着的。
+     * 也就是说这条钉的是**结构**而不是今天的可达行为——将来谁把装订读进开眼段，它才会变成真 bug。
+     */
+    @Test
+    public void aDeadBoundTargetClearsTheBindingButNotTheLock() {
+        run.buyUpgrade(Balance.ShopCard.MID_COURSE);
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy bound = bearingUp(START_X, START_Y, 25f, 200f);
+        frame(m);                                                   // 射前雷达装订
+        assertTrue("前提：这一枚已经装订上了", m.unitSet);
+        assertEquals("装订没记下是哪一只 ⇒ 中段引导读的是空气", slotOf(bound), m.boundSlot);
+
+        Enemies.Enemy held = bearingUp(START_X, START_Y, 10f, 120f);
+        m.targetSlot = slotOf(held);
+        m.targetBorn = held.born;
+        bound.hp = 0;                                               // 装订的那只血归零、还没摘表
+        frameAt(m, 0f, FAR);
+        assertEquals("装订的那只打死了却不摘装订 ⇒ 中段引导朝一具尸体转向",
+                Missiles.Missile.NO_TARGET, m.boundSlot);
+        assertEquals("清理路径共用了 ⇒ 装订段替导引头摘掉了目标", slotOf(held), m.targetSlot);
+    }
+
     /** 半角 ≥90° 时 {@code dot²} 判据会把**正后方**也算进锥内 ⇒ 视野静默变全向，必须当场炸。 */
     @Test
     public void aConeThatWideFailsLoudlyInsteadOfGoingOmnidirectional() {
@@ -179,7 +310,7 @@ public final class MissileBehaviorTest {
         if (radar) bad.radarHalfDeg = halfDeg; else bad.seekerHalfDeg = halfDeg;
         Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
         try {
-            beh.beginFrame(pool, foes, bad);
+            beh.beginFrame(pool, foes, bad, run);
             beh.advance(m, bad, STEP, foes, W, H, FAR);
             throw new AssertionError((radar ? "radar" : "seeker") + "HalfDeg=" + halfDeg + " 应该当场炸");
         } catch (IllegalStateException expected) {
@@ -212,20 +343,24 @@ public final class MissileBehaviorTest {
     /**
      * 二次点火**要买**：他的原话 L14750「锁定最近的目标，再次点火」在 L41661 被自己加了括号
      * 「如果没有二次点火卡就没有再次点火」（UTC 2026-09-29T19:35:24.098Z＝本地 09-30 03:35:24）。
-     * 卡本身是簇 II 的活，这里先把**开关那一侧**钉住：置位后必须同时出现点火位、回到 boost、计时归零。
+     * "没买"那一侧由 {@link #seekerLocksJustInsideItsFieldOfViewWithoutIgniting} 钉，这条钉"买了"那一侧。
      *
-     * <p>开 {@code new Balance.Missile()} 局部实例，不改静态那个（类注释那条规则）。
+     * <p>⚠ 开关的载体换过一次：出厂那个 {@code Balance.Missile.reIgnitionOnAcquire} 布尔已摘除
+     * （2026-10-01 簇 II C1 落码），商品位只从 {@link ShopRun#reIgnitionOn()} 经 {@code beginFrame}
+     * 解析。留着那个布尔就是给"再点火"留第二条触发路径，而 {@code Balance} 那条在真机上永远不会被
+     * 点亮——一条没人读、却能改行为的旁路，比缺功能更难查。
      */
     @Test
     public void anAcquisitionReIgnitesOnlyWhenTheCardIsOwned() {
-        Balance.Missile withCard = new Balance.Missile();
-        withCard.reIgnitionOnAcquire = true;
+        run.buyUpgrade(Balance.ShopCard.IGNITION);                  // 一级买的就是"再点火"这个机制本身
         Missiles.Missile m = coasting(START_X, START_Y, 0f, -MUZZLE_SPEED);
-        bearingFromAxis(m, withCard.seekerHalfDeg - 0.1f, withCard.seekerRange - 5f);
-        beh.beginFrame(pool, foes, withCard);
-        int flags = beh.advance(m, withCard, 0f, foes, W, H, FAR);
+        Enemies.Enemy e = bearingFromAxis(m, spec.seekerHalfDeg - 0.1f, spec.seekerRange - 5f);
+        int flags = frameAt(m, 0f, FAR);
+        assertTrue("根本没锁定 ⇒ 这条会退化成只看相位（flags=" + flags + "）",
+                (flags & MissileBehavior.FLAG_ACQUIRED) != 0);
         assertTrue("买了卡还没点火 ⇒ 商品位没接到 FLAG_IGNITED",
                 (flags & MissileBehavior.FLAG_IGNITED) != 0);
+        assertSame(e, foes.objAt(m.targetSlot));
         assertEquals(Missiles.Missile.PH_BOOST, m.phase);
         assertEquals("再点火要把计时器归零", 0f, m.boostT, 0f);
     }
@@ -247,6 +382,95 @@ public final class MissileBehaviorTest {
         assertEquals("半径这条上界没生效 ⇒ 视场成了无限远", 0,
                 frameAt(range, 0f, FAR) & MissileBehavior.FLAG_ACQUIRED);
         assertEquals(Missiles.Missile.NO_TARGET, range.targetSlot);
+    }
+
+    /**
+     * 「二次点火」后面三级卖的是**扇形半径**：+25px/级，出厂 50 ⇒ 满级 125（他「收」的那句
+     * 「seekerRange 125px」，分配见池件 §30；本卡领半径、过载卡领夹角）。
+     *
+     * <p>钉的是**上界恰好落在 75**（一级）：只钉"50.1 现在锁得到"的话，把半径写成 +∞、
+     * 或把 25 加成 250，这条都照过——而那是两种完全不同的错（前者让视场退化成无限远，
+     * 后者让一张卡吃掉整个屏幕）。两侧各钉一点，钉的才是 `spec.seekerRange + bonus` 这个式子。
+     */
+    @Test
+    public void theIgnitionCardExtendsTheSeekerRadiusByExactlyItsBonus() {
+        run.buyUpgrade(Balance.ShopCard.IGNITION);                  // 一级 = +25px
+        float reach = spec.seekerRange + run.seekerRangeBonus();
+        assertEquals("卡面对不上这一级的读数", 75f, reach, 0f);
+
+        Missiles.Missile got = coasting(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        bearingFromAxis(got, 0f, spec.seekerRange + 0.1f);           // 出厂圈外一格、新圈内
+        assertTrue("买了半径卡还锁不到 ⇒ 有效半径没进判据",
+                (frameAt(got, 0f, FAR) & MissileBehavior.FLAG_ACQUIRED) != 0);
+
+        Missiles.Missile miss = coasting(START_X, START_Y - 200f, 0f, -MUZZLE_SPEED);
+        bearingFromAxis(miss, 0f, reach + 0.1f);                     // 新圈外一格
+        assertEquals("上界没跟着涨 ⇒ 加成加在了别处（有效半径应该恰好 " + reach + "）", 0,
+                frameAt(miss, 0f, FAR) & MissileBehavior.FLAG_ACQUIRED);
+    }
+
+    /**
+     * 满级读数 125px 的**行为侧**落点：三级买满之后，扇形上界必须停在 50+75=125，一级不多一级少。
+     *
+     * <p>这条与 {@link #theIgnitionCardExtendsTheSeekerRadiusByExactlyItsBonus} 不是重复：那条钉
+     * "加成的单位是 25"，这条钉"三级叠到 125 这个他点过头的数"，中间隔着 {@code seekerRangeMaxLevel}
+     * 那道级数闸——级数被改到 2 而每级不变时，只有这条会红。
+     */
+    @Test
+    public void theIgnitionRadiusReachesTheAdoptedOneTwentyFiveOnlyAtMaxLevel() {
+        for (int n = 0; n < Balance.shop.seekerRangeMaxLevel; n++) run.buyUpgrade(Balance.ShopCard.IGNITION);
+        float reach = spec.seekerRange + run.seekerRangeBonus();
+        assertEquals("满级视场半径不是他「收」的那个数", 125f, reach, 0f);
+
+        Missiles.Missile got = coasting(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        bearingFromAxis(got, 0f, reach - 0.1f);
+        assertTrue("满级还够不着自己的读数", (frameAt(got, 0f, FAR) & MissileBehavior.FLAG_ACQUIRED) != 0);
+
+        Missiles.Missile miss = coasting(START_X, START_Y - 200f, 0f, -MUZZLE_SPEED);
+        bearingFromAxis(miss, 0f, reach + 0.1f);
+        assertEquals(0, frameAt(miss, 0f, FAR) & MissileBehavior.FLAG_ACQUIRED);
+    }
+
+    /**
+     * 「机动过载」卖的两样里，**视场**那半是**总夹角** 60°→84°（他「收」的口径），折半成 42° 是
+     * 实现里的比较量。所以这条同时钉三件事：加成进了判据、进的是**半**份、折半没折错。
+     *
+     * <p>如果写成 {@code seekerHalfDeg + bonus}（整角当半角加），满级锥沿停在 54°——42.1° 那个点
+     * 照样锁得到，只有下面第二枚弹会红。这正是"卡面印 84°、实际视野 108°"那种没人报的错。
+     */
+    @Test
+    public void theHandlingCardWidensTheSeekerArcByHalfItsBonus() {
+        for (int n = 0; n < Balance.shop.handlingMaxLevel; n++) run.buyUpgrade(Balance.ShopCard.HANDLING);
+        float half = spec.seekerHalfDeg + 0.5f * run.seekerArcDegBonus();
+        assertEquals("满级总夹角不是他「收」的那个数", 84f, 2f * half, 0f);
+
+        Missiles.Missile got = coasting(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        bearingFromAxis(got, spec.seekerHalfDeg + 0.1f, spec.seekerRange - 5f);   // 出厂锥外、新锥内
+        assertTrue("买满视场卡还是锁不到 ⇒ 角度加成没进判据",
+                (frameAt(got, 0f, FAR) & MissileBehavior.FLAG_ACQUIRED) != 0);
+
+        Missiles.Missile miss = coasting(START_X, START_Y - 200f, 0f, -MUZZLE_SPEED);
+        bearingFromAxis(miss, half + 0.1f, spec.seekerRange - 5f);                // 新锥沿外一格
+        assertEquals("锥沿退回出厂那条 ⇒ 加成没生效；锥沿越过 " + half + "° ⇒ 总夹角当成半角加了",
+                0, frameAt(miss, 0f, FAR) & MissileBehavior.FLAG_ACQUIRED);
+    }
+
+    /**
+     * **射前雷达锥不跟涨**：它的半角是 L38831 那句「无限长半径的扇形区域」里的形状，本来就没有
+     * 半径可言；把夹角加成加到它上面会让"能不能出弹"变成成长量——那不在「机动过载」的卡面上，
+     * 也不在他给这张卡定的那两样（最大过载、导引头视场）里。
+     *
+     * <p>⚠ 这条自己防自己空转：先断言卡确实买到了（{@code seekerArcDegBonus() > 0}），否则
+     * "没装订上"会因为根本没买卡而通过。
+     */
+    @Test
+    public void theHandlingCardLeavesTheLaunchRadarConeAlone() {
+        for (int n = 0; n < Balance.shop.handlingMaxLevel; n++) run.buyUpgrade(Balance.ShopCard.HANDLING);
+        assertTrue("卡没买上 ⇒ 这条会因为什么都没发生而通过", run.seekerArcDegBonus() > 0f);
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        bearingUp(START_X, START_Y, spec.radarHalfDeg + 0.1f, 200f);
+        assertEquals(0, frame(m) & MissileBehavior.FLAG_ACQUIRED);
+        assertFalse("射前锥跟着视场卡涨了 ⇒ 出得出弹变成成长量", m.unitSet);
     }
 
     /**
@@ -325,7 +549,7 @@ public final class MissileBehaviorTest {
 
         float ax0 = turning.vx, ay0 = turning.vy;
         for (int s = 0; s < 30; s++) {
-            beh.beginFrame(pool, foes, spec);
+            beh.beginFrame(pool, foes, spec, run);
             beh.advance(straight, spec, STEP, foes, W, H, FAR);
             beh.advance(turning, spec, STEP, foes, W, H, FAR);
             assertEquals("第 " + s + " 步两枚弹速率不同 ⇒ 转弯改掉了速率",
@@ -390,6 +614,48 @@ public final class MissileBehaviorTest {
         assertEquals("末速没夹在地板上 ⇒ 地板这条没被考验到", spec.stallSpeed, speed(m), 1e-3f);
         assertTrue("全程没贴着转角上界跑 ⇒ 这条用例是空转：" + Math.toDegrees(lastTurn) + "°",
                 lastTurn >= cap - 1e-4f);
+    }
+
+    /**
+     * 「机动过载」卖的**第二样**：最大过载 {@code +370px/s² ×4} ⇒ 出厂 520 抬到 2000。
+     * 这条要证明那张卡**有货可卖**——{@link #stallFloorCapsTheTurnRateInsteadOfDrilling} 已经量出
+     * 同一条几何下 PN 的指令是 5.3～10.6rad/s，压死在出厂那道 4.33rad/s 的闸上；把闸抬到
+     * 16.67rad/s 之后，同一条几何应该**放开转**、并且仍然停在抬高的那道闸以内。
+     *
+     * <p>只比"拐得更多"是不够的：真正的失效模式是**加成写进了 {@code Balance}**（那会让无卡的
+     * 出厂值也跟着涨，而 {@code ShopRun} 全零那条由 {@code ShopRulesTest} 钉）或者**闸整个失效**
+     * （那会变成钻头）。所以上界那条断言一句都不能省。
+     */
+    @Test
+    public void theHandlingCardOpensTheOverloadGateItSells() {
+        for (int n = 0; n < Balance.shop.handlingMaxLevel; n++) run.buyUpgrade(Balance.ShopCard.HANDLING);
+        float baseCap = spec.maxLatAccel / spec.stallSpeed * STEP;                     // 出厂：4.14°/步
+        float cardCap = (spec.maxLatAccel + run.latAccelBonus()) / spec.stallSpeed * STEP;
+        assertEquals("满级过载读数对不上卡面", 2000f, spec.maxLatAccel + run.latAccelBonus(), 0f);
+        assertTrue("抬完的闸比出厂还低 ⇒ 这张卡是负资产", cardCap > baseCap);
+
+        Missiles.Missile m = coasting(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        float dist = 40f;
+        Enemies.Enemy chase = bearingFromAxis(m, 25f, dist);
+        lockAt(m, chase);
+        float maxTurn = 0f;
+        for (int s = 0; s < 170; s++) {                               // 与失速地板那条同一套摆位
+            keepBearing(m, chase, 25f, dist);
+            float len = speed(m);
+            chase.vx = -m.vy / len * 150f;
+            chase.vy = m.vx / len * 150f;
+            float before = (float) Math.atan2(m.vy, m.vx);
+            frame(m);
+            float turned = Math.abs(angleDelta(m.vx, m.vy,
+                    (float) Math.cos(before), (float) Math.sin(before)));
+            assertTrue("第 " + s + " 步转了 " + Math.toDegrees(turned) + "°，超过卡抬起来的那道闸 "
+                            + Math.toDegrees(cardCap) + "° ⇒ 过载上限整个失效（会变成钻头）",
+                    turned <= cardCap + 1e-4f);
+            if (turned > maxTurn) maxTurn = turned;
+        }
+        assertTrue("170 步里最大转角 " + Math.toDegrees(maxTurn) + "° 没越过出厂那道 "
+                        + Math.toDegrees(baseCap) + "° ⇒ 卡没把闸抬起来（无卡对照见 stallFloor…）",
+                maxTurn > baseCap + 1e-4f);
     }
 
     /**
@@ -701,7 +967,7 @@ public final class MissileBehaviorTest {
         // 补成"开眼的滑行段"再走一步：mode0 下新出膛的那枚只会装订，用它验松手是问错了人
         settle(replacement, START_X, START_Y, 0f, -MUZZLE_SPEED);
         openEye(replacement);
-        beh.beginFrame(tiny, foes, spec);
+        beh.beginFrame(tiny, foes, spec, run);
         int flags = beh.advance(replacement, spec, STEP, foes, W, H, FAR);
         assertTrue("满池淘汰之后这一格还是锁不上 ⇒ 上一代的戳留下了（flags=" + flags + "）",
                 (flags & MissileBehavior.FLAG_ACQUIRED) != 0);
@@ -753,7 +1019,7 @@ public final class MissileBehaviorTest {
             case PATH_OFFSCREEN:
                 holder.y = START_Y + 200f;
                 holder.vy = MUZZLE_SPEED;
-                beh.beginFrame(pool, foes, spec);
+                beh.beginFrame(pool, foes, spec, run);
                 assertTrue((beh.advance(holder, spec, STEP, foes, W, H, 40)
                         & MissileBehavior.FLAG_GONE) != 0);
                 break;
@@ -831,7 +1097,7 @@ public final class MissileBehaviorTest {
     public void anEnemyPoolOfAnotherCapacityFailsLoudly() {
         Enemies other = new Enemies(ENEMY_CAP + 1);
         try {
-            beh.beginFrame(pool, other, spec);
+            beh.beginFrame(pool, other, spec, run);
             throw new AssertionError("位图按敌人容量建，容量换了必须炸，不能靠调用方记住");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("capacity"));
@@ -856,6 +1122,351 @@ public final class MissileBehaviorTest {
                     w.bulletSpeed >= floor && w.bulletSpeed <= ceiling);
         }
         assertTrue("一把制导武器都没有 ⇒ 这条在空转", guided > 0);
+    }
+
+    // ---- 九、格斗导弹：第二条流（簇 II C2）--------------------------------------------------
+
+    /**
+     * 发射判据的三条半边一次钉住：半径、半角、"取最近"。口径出处是他逐字的 L36897（plain，
+     * UTC 2026-09-28T22:58:27.676Z＝本地 09-29 06:58:27）：「发射条件是飞机前向60度内且距离满足
+     * 小于等于x时。x取50，若机头前半径50、圆心角60度的扇形内有没有被格斗弹锁定的敌机，
+     * <b>锁定最近的敌机</b>」——半径 50 与"取最近"都是他的数；
+     * **"圆心角 60° ⇒ 半角 30°" 这个折半是我的换算**（判据全程按半角走，同 {@code seekerHalfDeg} 那条）。
+     *
+     * <p>四次摆位各挡一种错法：轴上但在半径外＝射程无限；半径内但在锥外**而且它才是全场最近**＝
+     * "先挑近的、再看角度"（表现是朝屏幕侧面出弹）；血已归零那只同轴同锥且更近＝把还没摘表的
+     * 尸体当目标；最后两只都在扇形里，一个偏轴但近、一个正轴但远＝nearest 那条排序。
+     */
+    @Test
+    public void theLaunchGateHandsBackTheNearestEnemyInsideItsSector() {
+        dog.beginFrame(dogPool, foes, spec, run);
+        assertEquals("场上没人 ⇒ 一枚都不许出", -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);          // 轴上，但在半径外
+        assertEquals("半径也算进锁定 ⇒ 这张卡变成了射程无限的第二把主炮",
+                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        bearingUp(START_X, START_Y, spec.dogfightHalfDeg + 10f, 20f);      // 半径内、锥外，而且全场最近
+        assertEquals("先取近者再看角度 ⇒ 它会朝屏幕侧面出弹",
+                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        bearingUp(START_X, START_Y, 0f, 30f).hp = 0;                       // 锥内、半径内、更近，但血已归零
+        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        Enemies.Enemy near = bearingUp(START_X, START_Y, 20f, 44f);
+        bearingUp(START_X, START_Y, 0f, 49f);                              // 更贴轴线，但更远
+        assertEquals("挑的不是扇形里最近那一只 ⇒ 跨过眼前去打后面那只",
+                slotOf(near), dog.tryLaunch(START_X, START_Y, foes, spec));
+    }
+
+    /**
+     * "50" 这个数的口径钉在源头：它必须仍然等于 <b>5 倍机长</b>，而本仓对机长的读法是
+     * **受击直径 = 2 × {@code Balance.player.radius}**。他先从「x暂定五倍飞机长度」（L36568，plain，
+     * UTC 2026-09-28T22:10:55.534Z＝本地 09-29 06:10:55）改口到「x取50」（L36897），
+     * 50 只在受击半径 5 这一档上刚好等于 5×机长（另外两个候选：精灵盒 11 ⇒ 55、机头跨度 16 ⇒ 80）。
+     *
+     * <p>这条不是冗余：改 {@code player.radius} 会同时挪动受击圈与画面，唯独 {@code dogfightRange}
+     * 是一个写死的浮点——没有任何编译期依赖会替你响。
+     */
+    @Test
+    public void itsLaunchRangeIsStillFiveHullLengths() {
+        assertEquals("发射半径与 5×机长脱钩 ⇒ Balance.Missile.dogfightRange 那条口径变了",
+                2f * Balance.player.radius * 5f, spec.dogfightRange, 0f);
+    }
+
+    /**
+     * 「一只敌机可以同时挂一锁＋二锁＋格斗锁是工程设计，弹体池建议分家」（L37356，plain，
+     * UTC 2026-09-28T23:52:47.500Z＝本地 09-29 07:52:47）⇒ 占用戳**只读本池**。
+     *
+     * <p>反面也要钉：同一条流内部仍是一敌一锁。第二帧那一次不能省——同一帧返回 -1 可能只是
+     * {@code acquire} 回填的戳在起作用，而下一帧的 -1 才证明戳是由"池里那枚弹此刻持有的目标"
+     * 重建的（那才是分家之后仍然成立的那半条，也是这条流不需要发明节拍字段的全部理由）。
+     */
+    @Test
+    public void theLaunchGateYieldsToItsOwnLocksButNotToTheOtherStream() {
+        Enemies.Enemy prey = bearingUp(START_X, START_Y, 0f, 40f);
+        Missiles.Missile std = coasting(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        lockAt(std, prey);                        // 普通弹的锁挂在**标准流**那一套表上
+        frame(std);
+        dog.beginFrame(dogPool, foes, spec, run);
+        assertEquals("跨池排他了 ⇒ 已挂普通锁的目标没人补位，而近身问题正是格斗弹来解的",
+                slotOf(prey), dog.tryLaunch(START_X, START_Y, foes, spec));
+        Missiles.Missile m = dogPool.spawn();
+        settle(m, START_X, START_Y, 0f, -MUZZLE_SPEED);
+        dog.armDogfight(m, foes, slotOf(prey));
+        assertEquals("同一帧刚锁上就再派一枚 ⇒ 一敌一锁没接住",
+                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        dog.beginFrame(dogPool, foes, spec, run);
+        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
+    }
+
+    /**
+     * 装配＝落锁＋开眼在**同一步**里做完：L36897「锁定最近的敌机」（锁在发射那一刻由火控解出）、
+     * L37468（plain，UTC 2026-09-29T00:17:58.473Z＝本地 08:17:58）「战机判断是否开眼」
+     * （开眼权在发射方，弹体自己没有这条判断）、L37155「格斗弹还有应该全程锁」。
+     *
+     * <p>后半那句才是这条用例的重点：**第一步安静得没有任何事件**。若实现把锁留到下一帧补做
+     * （普通弹那条路），这里会多出一个 {@code FLAG_ACQUIRED}——表现上看不出差别，但"生来带锁"
+     * 就变成了"每一枚都先有一帧是空的"，而 L37155 说得很死：不许有那一帧。
+     */
+    @Test
+    public void everyDogfightMissileIsBornLockedWithItsEyeOpen() {
+        Enemies.Enemy prey = bearingUp(START_X, START_Y, 0f, 45f);
+        Missiles.Missile m = armedDog();
+        assertTrue("装配没落锁 ⇒ 这是一枚无的弹", m.targetSlot >= 0);
+        assertEquals(slotOf(prey), m.targetSlot);
+        assertEquals("落的是代次戳不对的那一只", prey.born, m.targetBorn);
+        assertTrue(m.seekerOpen);
+        assertEquals("锁着目标的第一步不该报任何事件", MissileBehavior.FLAG_NONE, dogStep(m));
+        assertEquals(slotOf(prey), m.targetSlot);
+    }
+
+    /**
+     * 漏装配是**编程错误**，不是一种运行状态，所以当场抛、不静默补锁：后者会把"每枚格斗弹生来带锁"
+     * 这条设定做成概率事件（扇形里有敌人时它自己会锁上，没有时它就是一枚直飞弹）。
+     */
+    @Test
+    public void anUnarmedDogfightMissileFailsLoudlyInsteadOfLockingLate() {
+        bearingUp(START_X, START_Y, 0f, 40f);
+        dog.beginFrame(dogPool, foes, spec, run);
+        Missiles.Missile m = dogPool.spawn();                  // 带着 RADAR_PENDING 出膛＝没装配
+        settle(m, START_X, START_Y, 0f, -MUZZLE_SPEED);
+        try {
+            dog.advance(m, spec, STEP, foes, W, H, FAR);
+            throw new AssertionError("漏装配该当场炸，静默补锁会让它看起来像另一种飞行段");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("unarmed"));
+        }
+    }
+
+    /** 两条流的入口各守各的道：串了流、漏了本帧的 beginFrame、把 -1 当槽号传进来，全部当场炸。 */
+    @Test
+    public void theLaunchAndArmEntryPointsGuardTheirOwnLane() {
+        Missiles.Missile m = muzzle(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        try {
+            beh.tryLaunch(START_X, START_Y, foes, spec);
+            throw new AssertionError("标准流上没有发射判据这条扇形，串过来必须炸");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("dogfight stream"));
+        }
+        try {
+            beh.armDogfight(m, foes, 0);
+            throw new AssertionError("标准流的实例装不了格斗弹");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("dogfight stream"));
+        }
+        MissileBehavior fresh = new MissileBehavior(ENEMY_CAP, MissileBehavior.STREAM_DOGFIGHT);
+        try {
+            fresh.tryLaunch(START_X, START_Y, foes, spec);
+            throw new AssertionError("本帧没 beginFrame：占用戳还是上一帧的，同帧刚锁走的那只会再吃一枚");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("beginFrame"));
+        }
+        dog.beginFrame(dogPool, foes, spec, run);
+        try {
+            dog.armDogfight(m, foes, -1);
+            throw new AssertionError("-1 是调用方漏了判空，静默装配会造出一枚无的弹");
+        } catch (IllegalArgumentException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("slot"));
+        }
+    }
+
+    /**
+     * 「格斗弹还有应该全程锁」（L37155，plain，UTC 2026-09-28T23:37:28.439Z＝本地 09-29 07:37:28）
+     * ⇒ 导引头扫描那半边被钳掉，只留引信（{@link #itsFuzeStaysArmedEvenThoughItsSearchIsClamped}）。
+     *
+     * <p>对照组是这条用例的一半：同一份 {@link ShopRun}（一张卡没买）、同一套几何，普通弹会换锁。
+     * 不写那一句的话，诱饵根本没进视场时"格斗弹没换"也是绿的——那是空转，不是断言。
+     */
+    @Test
+    public void aDogfightMissileNeverHopsOntoACloserEnemy() {
+        Enemies.Enemy prey = bearingUp(START_X, START_Y, 0f, 45f);
+        Missiles.Missile m = armedDog();
+        Enemies.Enemy decoy = bearingFromAxis(m, 18f, 25f);     // 更近、在锥内、在半径内
+        Missiles.Missile std = coasting(m.x, m.y, 0f, -MUZZLE_SPEED);
+        lockAt(std, prey);
+        assertTrue("对照组没换锁 ⇒ 这只诱饵根本没进导引头，下面那条断言是空转",
+                (frameAt(std, 0f, FAR) & MissileBehavior.FLAG_RELOCKED) != 0);
+        assertEquals("对照组换到了诱饵身上（几何前提成立）", slotOf(decoy), std.targetSlot);
+        assertEquals(MissileBehavior.FLAG_NONE, dogStepAt(m, 0f));
+        assertEquals("全程锁被扫描改写 ⇒ 它去追那只更近的了", slotOf(prey), m.targetSlot);
+    }
+
+    /**
+     * 钳掉的只有"搜索"那半边，引信照旧：{@code scanFoes} 里 {@code if (!seek) continue;} 排在
+     * fused 之后。写反的失效方向是**打不中**——一枚贴上敌机的格斗弹因为不换目标就永远不结算，
+     * 而它在画面上正好糊在目标身上，看起来像命中延迟。
+     */
+    @Test
+    public void itsFuzeStaysArmedEvenThoughItsSearchIsClamped() {
+        bearingUp(START_X, START_Y, 0f, 45f);
+        Missiles.Missile m = armedDog();
+        float fuseRange = Balance.enemies[Balance.Enemy.STRAIGHT].hitRadius()  // 与 foe() 摆进去的那一圈同口径
+                + m.size * 0.5f + spec.fusePad;
+        bearingFromAxis(m, 0f, fuseRange - 0.5f);              // 贴进引信圈
+        bearingFromAxis(m, 25f, fuseRange + 0.5f);             // 界外那一侧（0 步长 ⇒ 不会自己飘进去）
+
+        int flags = dogStepAt(m, 0f);
+        assertEquals("贴脸也不结算 ⇒ 钳扫描顺手把引信也钳了",
+                MissileBehavior.FLAG_DETONATE, flags);
+    }
+
+    /**
+     * 「格斗弹脱锁应直接自爆」（L37108，plain，UTC 2026-09-28T23:30:06.025Z＝本地 09-29 07:30:06）
+     * ＋「两次锁定只在普通导弹上……滑行段脱锁是普通导弹的锁定机制带来的，**是推论，不是设计**」
+     * ⇒ 这条流不读 {@code seekTimeoutSec} 那 0.5s（那是普通弹的中段形状）。
+     *
+     * <p>三条退场路**同时**成立时才看得出序：寿命已到、人已出界、目标刚没。他 L37468 要的就是
+     * 这一处"集中判断"，而集中判断若把自爆排在寿命／出界之后，表现是目标死了的弹多飞半屏再炸。
+     */
+    @Test
+    public void losingTheLockSelfDestructsWithoutWaitingForTheTimeout() {
+        Enemies.Enemy prey = bearingUp(START_X, START_Y, 0f, 45f);
+        Missiles.Missile m = armedDog();
+        assertEquals(MissileBehavior.FLAG_NONE, dogStep(m));
+        prey.hp = 0;                                    // 血归零还没摘表：liveTarget 那半边
+        m.life = spec.maxLifeSec;
+        m.x = -FAR;
+        int flags = dogStepAt(m, 0f);
+        assertTrue("脱锁没当场自爆 ⇒ 它会带着空锁把剩下的寿命飞完（flags=" + flags + "）",
+                (flags & MissileBehavior.FLAG_SELF_DESTRUCT) != 0);
+        assertEquals("自爆去等了那 0.5s ⇒ 那是普通弹的规则（0 步长下 seekT 该原封不动）",
+                0f, m.seekT, 0f);
+        assertEquals("寿命／出界抢了自爆的位 ⇒ 集中判断那处的判序排错了",
+                0, flags & MissileBehavior.FLAG_GONE);
+        assertTrue(MissileBehavior.isRetired(flags));
+    }
+
+    /** 手里还有目标时出界＝回收，不是自爆：两条退场路的分工在第二条流上同样成立。 */
+    @Test
+    public void flyingOffTheScreenWithALiveLockIsReclaimedNotSelfDestructed() {
+        Enemies.Enemy prey = bearingUp(START_X, START_Y, 0f, 45f);
+        Missiles.Missile m = armedDog();
+        m.x = -FAR;
+        prey.x = m.x;                                   // 目标跟着出去：锁仍然作数
+        prey.y = m.y + 40f;
+        int flags = dogStepAt(m, 0f, 0);
+        assertEquals(MissileBehavior.FLAG_GONE, flags);
+    }
+
+    /**
+     * 「自带高过载…并且能叠加最大过载卡」（L36568 / L36897 两个版本里都有这句）⇒ 两个数各钉一个等式：
+     * <b>出厂那道闸</b>＝1040（不是普通弹的 520），<b>买一级机动过载之后</b>＝1040＋370（不是 520＋370，
+     * 也不是"卡对整个第二条流无效"）。
+     *
+     * <p>摆位照 {@link #stallFloorCapsTheTurnRateInsteadOfDrilling} 那一套（偏轴 25°、横向 150px/s，
+     * 位置与速度一起跟着弹轴走），差别只在**距离取 20px 而不是 40px**：PN 的钳前指令与距离成反比，
+     * 40px 上它实测只有 8.42°/步——出厂那道 8.28° 刚好压得住，抬一级（11.22°）就压不住了，
+     * 那时候"最大转角"读的是指令而不是闸，等式钉不住。20px 是"还能躲开引信圈"（实测 15px 会在第 11 步
+     * 结算）**又**足以压满加过成的那道闸的那一档。导航常数这条流是 5（他「N'先取5」L37617），
+     * 指令因此是普通弹的 5/3 倍——那也是它能压满的原因。
+     */
+    @Test
+    public void itsOverloadGateStartsFromItsOwnNumberAndStillTakesTheCard() {
+        Enemies.Enemy chase = bearingUp(START_X, START_Y, 0f, 40f);
+        float stdCap = spec.maxLatAccel / spec.stallSpeed * STEP;            // 普通弹出厂那道
+        float dogCap = spec.dogfightLatAccel / spec.stallSpeed * STEP;       // 这条流出厂那道
+        assertTrue("这条流的出厂闸不比普通弹高 ⇒ 「自带高过载」根本没落，下面的等式没有可比性",
+                dogCap > stdCap);
+        assertEquals("无卡读数：" + Math.toDegrees(dogCap) + "°/步", dogCap,
+                steerForTurns(reArm(chase), chase, dogCap, 20f), 1e-4f);
+        assertTrue("机动过载卡第一级就被拒 ⇒ 这条用例的前提变了",
+                run.buyUpgrade(Balance.ShopCard.HANDLING));
+        float carded = (spec.dogfightLatAccel + run.latAccelBonus()) / spec.stallSpeed * STEP;
+        assertEquals("加成不是叠在 1040 上（叠在普通弹的 520 上会得到 "
+                        + Math.toDegrees((spec.maxLatAccel + run.latAccelBonus()) / spec.stallSpeed * STEP)
+                        + "°/步，完全不吃卡则是 " + Math.toDegrees(dogCap) + "°/步）",
+                carded, steerForTurns(reArm(chase), chase, carded, 20f), 1e-4f);
+    }
+
+    /** 清场重摆：把目标放回扇形正中，再走一遍真实的"判据→出膛→装配"。 */
+    private Missiles.Missile reArm(Enemies.Enemy prey) {
+        dogPool.clear();
+        prey.x = START_X;
+        prey.y = START_Y - 40f;
+        prey.vx = 0f;
+        prey.vy = 0f;
+        prey.hp = 20;
+        return armedDog();
+    }
+
+    /** 上面那条的摆位循环：每步把目标钉回"偏轴 25°、dist px"并给它一个垂直弹轴的横速。 */
+    private float steerForTurns(Missiles.Missile m, Enemies.Enemy chase, float cap, float dist) {
+        float best = 0f;
+        for (int s = 0; s < 170; s++) {                   // 170 步 = 2.83s < maxLifeSec
+            keepBearing(m, chase, 25f, dist);
+            float len = speed(m);
+            chase.vx = -m.vy / len * 150f;
+            chase.vy = m.vx / len * 150f;
+            float before = (float) Math.atan2(m.vy, m.vx);
+            int flags = dogStep(m);
+            assertEquals("第 " + s + " 步就退场了（flags=" + flags + "）⇒ 摆位没能撑满这条用例",
+                    MissileBehavior.FLAG_NONE, flags);
+            float turned = Math.abs(angleDelta(m.vx, m.vy, (float) Math.cos(before),
+                    (float) Math.sin(before)));
+            assertTrue("第 " + s + " 步转了 " + Math.toDegrees(turned) + "°，超过这道闸 "
+                            + Math.toDegrees(cap) + "° ⇒ 过载上限整个失效（会变成钻头）",
+                    turned <= cap + 1e-4f);
+            if (turned > best) best = turned;
+        }
+        return best;
+    }
+
+    /**
+     * 「动力段固定为1秒，不吃二次加速」（L36897）。这条流**不换目标**，所以"发现新目标时重开推力"
+     * 那个触发器对它结构性不成立；而 {@code reIgnite} 在 {@code beginFrame} 里对它恒 false 是第二道闸。
+     * 两道闸都要有人验：撤掉任何一道，这条用例都得红。
+     *
+     * <p>目标每步钉回"正前方 45px"⇒ 它永远追不上，于是这一枚能一路飞到寿命到点：
+     * 动力段在 {@code dogfightBoostSec}（60 步）结束、此后绝不回头、收尾是<b>静默销毁</b>而不是自爆
+     * （它手里一直有目标）。
+     */
+    @Test
+    public void itsBoostEndsOnceAndTheIgnitionCardCannotReopenIt() {
+        for (int n = 0; n < Balance.shop.seekerRangeMaxLevel; n++) {
+            run.buyUpgrade(Balance.ShopCard.IGNITION);
+        }
+        assertTrue("前提：那张卡本身是开着的（否则这条在空转）", run.reIgnitionOn());
+        Enemies.Enemy chase = bearingUp(START_X, START_Y, 0f, 45f);
+        Missiles.Missile m = armedDog();
+        assertEquals(Missiles.Missile.PH_BOOST, m.phase);
+        int steps = 0;
+        int boostSteps = 0;
+        boolean coasted = false;
+        int flags;
+        do {
+            keepBearing(m, chase, 0f, 45f);
+            flags = dogStep(m);
+            steps++;
+            assertEquals("二次点火摸到了第二条流", 0, flags & MissileBehavior.FLAG_IGNITED);
+            assertEquals("它先换了目标 ⇒ 这条用例的前提没了", slotOf(chase), m.targetSlot);
+            if (m.phase == Missiles.Missile.PH_BOOST) {
+                assertFalse("滑行段之后又回到动力段 ⇒ 偷偷重开了推力", coasted);
+                boostSteps++;
+            } else {
+                coasted = true;
+            }
+        } while (!MissileBehavior.isRetired(flags));
+        assertTrue("全程没进过滑行段 ⇒ 动力段那条判据根本没被考验到", coasted);
+        assertEquals("动力段不是 1 秒（" + boostSteps + " 步）",
+                Math.round(spec.dogfightBoostSec / STEP), boostSteps);
+        assertEquals("收尾该是寿命到点的静默销毁：" + flags, MissileBehavior.FLAG_GONE, flags);
+        assertEquals(spec.maxLifeSec, m.life, STEP);
+    }
+
+    /**
+     * 簇 II 那两张导引卡涨不到发射扇形上：二次点火卖的是<b>开眼之后</b>的导引头半径，机动过载卖的
+     * 是导引头的夹角与<b>弹体</b>的过载，而"机头前半径50、圆心角60度"（L36897）是**发射判据**。
+     * 让它们跟涨的一次性后果是"能不能自动出弹"变成成长量——那该是另一张卡的货，本仓今天没有。
+     */
+    @Test
+    public void theGuidanceCardsDoNotReachIntoItsLaunchSector() {
+        for (int n = 0; n < Balance.shop.seekerRangeMaxLevel; n++) {
+            run.buyUpgrade(Balance.ShopCard.IGNITION);
+        }
+        for (int n = 0; n < Balance.shop.handlingMaxLevel; n++) {
+            run.buyUpgrade(Balance.ShopCard.HANDLING);
+        }
+        bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);
+        bearingUp(START_X, START_Y, spec.dogfightHalfDeg + 10f, 20f);
+        dog.beginFrame(dogPool, foes, spec, run);
+        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
     }
 
     // ---- 助手 -------------------------------------------------------------------------------
@@ -920,6 +1531,40 @@ public final class MissileBehaviorTest {
     }
 
     /**
+     * 走一遍 {@code Game.fireDogfight} 的真实路径：本帧 {@code beginFrame} → {@code tryLaunch} →
+     * 出膛 → 装配。**调用前得先把敌人摆好**（它要的是"扇形里确有可锁目标"这个前提，摆不出来直接炸）。
+     *
+     * <p>为什么非要走 {@code tryLaunch} 而不是手写槽号：装配点与发射判据是这对入口唯一合法的接法，
+     * 自己拼 {@code targetSlot} 就绕过了"火控解出那一只"这半条设定（L36897）。
+     */
+    private Missiles.Missile armedDog() {
+        dog.beginFrame(dogPool, foes, spec, run);
+        int slot = dog.tryLaunch(START_X, START_Y, foes, spec);
+        assertTrue("扇形里没有可锁目标 ⇒ 这条用例摆错了位", slot >= 0);
+        WeaponFire.Template t = new WeaponFire.Template();
+        WeaponFire.fillTemplate(t, Balance.weapons[Balance.Weapon.MISSILE], 1f, 1f, 0, 0f, 0);
+        Missiles.Missile m = WeaponFire.fireMissile(dogPool, t, START_X, START_Y, 0f);
+        assertEquals("出膛速度不是真表那一格 ⇒ 下面所有转角上界的换算都算错了",
+                MUZZLE_SPEED, speed(m), 1e-4f);
+        dog.armDogfight(m, foes, slot);
+        return m;
+    }
+
+    private int dogStep(Missiles.Missile m) {
+        return dogStepAt(m, STEP, FAR);
+    }
+
+    private int dogStepAt(Missiles.Missile m, float dt) {
+        return dogStepAt(m, dt, FAR);
+    }
+
+    /** {@link #frameAt} 的第二流版：池、行为、戳全部换成 {@link #dogPool}／{@link #dog}。 */
+    private int dogStepAt(Missiles.Missile m, float dt, int margin) {
+        dog.beginFrame(dogPool, foes, spec, run);
+        return dog.advance(m, spec, dt, foes, W, H, margin);
+    }
+
+    /**
      * 推进一枚弹 {@code dt} 秒。
      *
      * <p><b>边界类用例必须传 {@code dt = 0}。</b>{@link MissileBehavior#advance} 先位移、后做
@@ -929,7 +1574,7 @@ public final class MissileBehaviorTest {
      * 边界两侧各钉一点，钉的才是判据本身。
      */
     private int frameAt(Missiles.Missile m, float dt, int margin) {
-        beh.beginFrame(pool, foes, spec);
+        beh.beginFrame(pool, foes, spec, run);
         return beh.advance(m, spec, dt, foes, W, H, margin);
     }
 

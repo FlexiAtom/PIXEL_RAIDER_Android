@@ -59,9 +59,10 @@ public final class MissilesTest {
     /**
      * 反射遍历 {@link Missiles.Missile} 的**每一个**实例字段：灌哨兵 → 复用 → 断言归零。
      *
-     * <p>跳过项只有两个，而且都是"复用时**故意**写新值"的代次戳，不是漏网：
-     * {@code seq}（淘汰按它比最老者）与 {@code targetSlot}（出膛挂 {@code RADAR_PENDING}，
-     * 让 {@code MissileBehavior} 在下一帧补做射前锁定）。后者必须单独钉等于 {@code RADAR_PENDING}
+     * <p>跳过项只有三个，而且都是"复用时**故意**写新值"的代次戳，不是漏网：
+     * {@code seq}（淘汰按它比最老者）、{@code targetSlot}（出膛挂 {@code RADAR_PENDING}，
+     * 让 {@code MissileBehavior} 在下一帧补做射前锁定）与 {@code boundSlot}（簇 II 的装订槽，
+     * 复位成 {@code NO_TARGET}＝"这一枚还没装订"）。后者必须单独钉等于 {@code RADAR_PENDING}
      * 而不是 {@code NO_TARGET}——写成后者池子照样跑、弹照样飞，只是**射前雷达永远不会补做**，
      * 而且没有任何地方会红。
      */
@@ -76,7 +77,7 @@ public final class MissilesTest {
         pool.killAt(0);
         Missiles.Missile b = pool.spawn();
         assertSame("池不按实例复用 ⇒ 下面那些断言测的就不是复用了", a, b);
-        ResetProbe.assertAllZero(b, "seq", "targetSlot");
+        ResetProbe.assertAllZero(b, "seq", "targetSlot", "boundSlot");
         assertTrue("seq 没往前走 ⇒ 淘汰最老者那条判据在第二次运行里会挑错人", b.seq > firstSeq);
         assertEquals("出膛没挂待锁标记：射前雷达会被静默跳过",
                 Missiles.Missile.RADAR_PENDING, b.targetSlot);
@@ -299,6 +300,26 @@ public final class MissilesTest {
                 concurrent <= spec.capacity);
         assertTrue("余量只剩 " + (spec.capacity / concurrent) + " 倍，注释里写的 1.7× 已经不成立",
                 spec.capacity >= concurrent * 1.5f);
+    }
+
+    /**
+     * 把 {@link Balance.Missile#dogfightCapacity} 那段注释里的账**变成可执行的**：这条流的并发上界是
+     * **在场敌数**，不是出膛率 × 寿命。理由是结构性的：发射判据本身要求"扇形里还有一只没被本流锁着的
+     * 敌机"（一敌一锁），而脱锁在同一帧自爆（L37108）⇒ 在飞枚数 ≤ 在场敌数是一条硬上界，
+     * 扳机卡叠到多少级都加不进来的那种上界。
+     *
+     * ⚠ 与上面那条 {@link #spawnRateBoundLeavesHeadroomInThePool} **不同源自**：那本账不看目标，
+     * 这本账只看目标。两处共用的数只有 {@code Balance.wave.maxAlive}，所以它现读、不写死 26。
+     */
+    @Test
+    public void theDogfightPoolIsSizedByTheOneLockPerFoeBound() {
+        Balance.Missile spec = Balance.missile;
+        float concurrent = Balance.wave.maxAlive;
+        assertTrue("在场敌数上界 " + concurrent + " 枚超出格斗弹池容量 " + spec.dogfightCapacity
+                + " ⇒ 它会开始淘汰自己流里的弹（那时「一敌一锁」这条硬上界就守不住了）",
+                concurrent <= spec.dogfightCapacity);
+        assertTrue("余量只剩 " + (spec.dogfightCapacity / concurrent) + " 倍，注释里那条 2.46× 已经不成立",
+                spec.dogfightCapacity >= concurrent * 2f);
     }
 
     /** 构造期挡住 0 与负数：否则 {@code free} 是零长数组，第一条断言就会以越界的名义报成别的错。 */

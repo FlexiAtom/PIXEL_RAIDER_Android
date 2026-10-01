@@ -140,8 +140,22 @@ public final class Game implements GameThread.Host {
     private Warheads warheads = new Warheads(Balance.missile.warheadCapacity, enemies.capacity());
     /** 两段视野 + 牛顿导引；内部那张 occupancy 位图按敌人容量构造，容量对不上会当场抛。 */
     private final MissileBehavior missileBehavior = new MissileBehavior(enemies.capacity());
+    /**
+     * **格斗弹那一流**的弹体池。与 {@link #missiles} 分家是他裁的（「弹体池建议分家」＋「跨池不排他
+     * 是工程设计」，L37356），分家的**全部理由**是两条锁互不相干：普通弹的一锁/二锁各自占位，
+     * 格斗弹的锁另算 ⇒ 一只敌机可以同时挂三份锁。两个池 ⇒ 两份 {@code occupiedStamp}（各在自己的
+     * {@link MissileBehavior} 实例里），"普通弹锁着的敌机格斗弹照样能锁"因此是结构事实，不是特判。
+     */
+    private final Missiles dogfightMissiles = new Missiles(Balance.missile.dogfightCapacity);
+    /** 格斗流的导引身份：读 {@code Balance.missile} 的 {@code dogfight*} 那一组自带档。 */
+    private final MissileBehavior dogfightBehavior =
+            new MissileBehavior(enemies.capacity(), MissileBehavior.STREAM_DOGFIGHT);
+    /** 格斗弹的出膛模板：与 {@link #shotTpl} **分开**，因为那一份的 crit 是逐发 roll 的。 */
+    private final WeaponFire.Template dogTpl = new WeaponFire.Template();
     /** 已处理过的淘汰次数：{@link Missiles#evicted} 是池外的**唯一**副本，读晚一次就可能被覆盖。 */
     private long evictSeen;
+    /** 同上，但记的是**格斗池**那一份副本（两池各有一只 evicted，共用一个基准会漏动画）。 */
+    private long dogEvictSeen;
     private Drops drops = new Drops(48);
     private SpatialGrid grid;
 
@@ -1238,7 +1252,7 @@ public final class Game implements GameThread.Host {
      * 再钳两次 ⇒ 结算页安静地显示"命中率 100%"，全链路没有任何东西会红。
      */
     private void stepChain(float dt) {
-        int made = chain.step(dt, player.x, player.y - 8f, shots, missiles);
+        int made = chain.step(dt, player.x, noseY(), shots, missiles);
         // 记账挪到**实际出膛**处：计划发数与真的打进池里的发数从此不可能对不上。
         if (made > 0) stats.addShots(made);
         stepEvictions();
@@ -1261,22 +1275,40 @@ public final class Game implements GameThread.Host {
     }
 
     /**
-     * 导弹的相位积分、两段视野与三路判据（判序写在 {@link MissileBehavior#advance} 里：
-     * 引信 → 空视场自爆 → 回收 → 再索敌）。它**有状态**（每帧从零重建的 occupancy 位图），
-     * 所以 {@code beginFrame} 必须先于本步任何一枚 {@code advance}——漏调的话那类错读起来
-     * 像"物理写坏了"，因此 {@code advance} 开头当场抛，不留给下游猜。
+     * 导弹这一帧要走的全部三步：两条流各积分一次，然后格斗流补一次发射。
+     *
+     * <p>两条流**共用这一个入口**是因为它们的差别全在 {@link MissileBehavior} 实例的身份里
+     * （{@code stream} → {@code beginFrame} 解析有效值），不在调度顺序里。⚠ 先后次序本身**没有**
+     * 跨流影响——两份占用位图各是各的，这正是「跨池不排他是工程设计」（L37356）的结构含义。
+     * 真正写死的是每条流**内部**的 {@code beginFrame → advance → 发射}：发射早于 advance 就看不到
+     * 本帧刚落下的锁，晚于 beginFrame 但早于 advance 也一样（判序见 {@link MissileBehavior#tryLaunch}）。
+     *
+     * <p>⚠ 池子**各自 clear**（见 {@code resetRun}）、淘汰动画**各自一份基准**（{@link #stepEvictions}
+     * 与 {@link #stepDogEvictions}）：{@link Missiles#evicted} 是每个池自己的那一份唯一副本。
+     */
+    private void stepMissiles(float dt) {
+        stepPool(missiles, missileBehavior, dt);
+        stepPool(dogfightMissiles, dogfightBehavior, dt);
+        // 发射排在**本流全部 advance 之后**：tryLaunch 读的占用戳要包含"这一帧刚锁上的那些"，
+        // 早一步就会朝同一只敌机在同一帧里出第二枚（判序写在 MissileBehavior#tryLaunch 的方法头）。
+        if (shopRun.dogfightOn() && player.weapon().guided) fireDogfight();
+    }
+
+    /**
+     * 一流弹的相位积分 + 三路判据。**两条流各调一次**，方法头那条判序对两流同形（差异全部
+     * 由 {@link MissileBehavior} 实例的 stream 在 {@code beginFrame} 里解析成有效值，这里不读流别）。
      *
      * <p>索敌与引信都**不碰 {@link SpatialGrid}**：网格的覆盖半径只有 {@code ring×CELL = 48px}，
      * 撑不到导引头的射程，用它只会得到"视野内的一小撮"⇒ 静默漏锁。这里扫的是活跃敌表
      * （≤ {@code Balance.wave.maxAlive} = 26），既正确又比建表+查询便宜。网格只留给
      * {@link #stepWarheads} 那条**近距**接触采样。
      */
-    private void stepMissiles(float dt) {
+    private void stepPool(Missiles pool, MissileBehavior behavior, float dt) {
         Balance.Missile spec = Balance.missile;
-        missileBehavior.beginFrame(missiles, enemies, spec);
-        for (int i = missiles.activeCount() - 1; i >= 0; i--) {
-            Missiles.Missile m = missiles.activeAt(i);
-            int flags = missileBehavior.advance(m, spec, dt, enemies,
+        behavior.beginFrame(pool, enemies, spec, shopRun);
+        for (int i = pool.activeCount() - 1; i >= 0; i--) {
+            Missiles.Missile m = pool.activeAt(i);
+            int flags = behavior.advance(m, spec, dt, enemies,
                     Screen.LOGIC_W, metrics.logicH, MARGIN);
             // 三路同归一条引爆（方案里编号 R13）：出处 = 记录 L14773 answers-OPT，
             // UTC 2026-09-25T09:29:00.463Z = 本地 2026-09-25 17:29:00，选项标签「自爆也展开，与撞敌同路」
@@ -1287,8 +1319,54 @@ public final class Game implements GameThread.Host {
             } else if ((flags & MissileBehavior.FLAG_SELF_DESTRUCT) != 0) {
                 detonateMissile(m, false);
             }
-            if (MissileBehavior.isRetired(flags)) missiles.killAt(i);
+            if (MissileBehavior.isRetired(flags)) pool.killAt(i);
         }
+    }
+
+    /**
+     * 格斗弹的发射端：**战机火控**每帧问一次"机头前那条扇形里还有没有没人锁的敌机"，有就出一枚。
+     * 它不在弹链里（{@code BulletChain} 不认识敌人，也不该认识），所以出膛、记账、淘汰动画
+     * 这三件事在这里各自补一遍——漏掉记账就是命中率虚高，见下面那三条 {@code stats} 的注释。
+     *
+     * <p>每帧**至多一枚**（不是"扇形里有几只就出几枚"）：判据本身一敌一锁，出第二枚要等第一枚
+     * 的锁在本帧的 advance 里落进占用戳；同一帧连出会把刚选出的那只重复选给自己。
+     *
+     * <p>⚠ 出膛后**必须**同帧 {@link MissileBehavior#armDogfight}：那枚弹带着 RADAR_PENDING 进
+     * {@code advance} 会当场抛（"生来带锁"是设定，不是概率，见那里的注释）。
+     */
+    private void fireDogfight() {
+        Balance.Missile spec = Balance.missile;
+        int slot = dogfightBehavior.tryLaunch(player.x, noseY(), enemies, spec);
+        if (slot < 0) return;                       // 扇形里没有可锁的 ⇒ 不发（不是"随便发一枚"）
+        Balance.Weapon w = player.weapon();
+        // 伤害档沿用**当前那把制导枪**：他的原话只说"自带高过载和舵效"，说的是导引参数，
+        // 没有第二套伤害档。这里重填一份模板而不是复用 shotTpl：那一份的 crit 是逐发 roll 的，
+        // 借用会让格斗弹和上一轮主炮共享同一个暴击判定。
+        WeaponFire.fillTemplate(dogTpl, w, 1f, growth.attackMul(), shopRun.damageBonus(),
+                rng.next01(), growth.critBonusPercent() + shopRun.critBonus());
+        Missiles.Missile m = WeaponFire.fireMissile(dogfightMissiles, dogTpl, player.x, noseY(), 0f);
+        dogfightBehavior.armDogfight(m, enemies, slot);
+        // 记账：**出膛一笔**，与 chain.step 那条同一个口径（少这一笔 addHit 就大过 addShots，
+        // 结算页会安静显示命中率 100%，全链路不红）。
+        stats.addShots(1);
+        stepDogEvictions();
+    }
+
+    /** 格斗池的满池淘汰：与 {@link #stepEvictions} 同一条 R22 口径（只播动画、不结算）。 */
+    private void stepDogEvictions() {
+        long total = dogfightMissiles.evictTotal();
+        if (total == dogEvictSeen) return;
+        dogEvictSeen = total;
+        spawnBurst(dogfightMissiles.evicted.x, dogfightMissiles.evicted.y,
+                12, dogfightMissiles.evicted.color);
+    }
+
+    /**
+     * 机头（= 出膛点）的 y。**弹链排放与格斗弹发射共用这一个读数**：画面上"弹从哪儿出来"必须
+     * 是同一个点，抄两份的话其中一份改了另一份不会跟着改，玩家看到的是同一把枪的两个枪口。
+     */
+    private float noseY() {
+        return player.y - 8f;
     }
 
     /**
@@ -1670,14 +1748,18 @@ public final class Game implements GameThread.Host {
         // shopRun.reset() 与第一次开火都会让 matches() 自己判出来。把缓存也抹掉反而会让
         // "布局是不是清了"变成一个要额外验证的状态。
         chain.clear();
-        // 两张新池同样在这里归零。⚠ `clear()` 的形状是"只置游标与槽位表"，这一点是硬的：
+        // 三张新池同样在这里归零。⚠ `clear()` 的形状是"只置游标与槽位表"，这一点是硬的：
         // 本方法有一条调用链跑在 **UI 线程**上（MainActivity:138 → GameSurfaceView:44 → 本方法），
         // 与渲染线程并发。所以撕裂读的最坏后果必须是"多丢几枚导弹"，不能是"读到半个相位状态机"。
         missiles.clear();
+        dogfightMissiles.clear();
         warheads.clear();
         // 清池之后 {@link Missiles#evicted} 里躺的还是上一局那只弹，把比较基准推到当前计数，
         // 免得新一局的某次淘汰在上一局的旧坐标上撒一团自毁粒子（R22 之后它不展开杆，但坐标还是旧的）。
+        // ⚠ 两条基准**各归各池**：evicted 是每个池自己的那一份副本，拿普通池的计数去比格斗池的
+        // 计数会在新一局第一次淘汰时安静漏掉动画。
         evictSeen = missiles.evictTotal();
+        dogEvictSeen = dogfightMissiles.evictTotal();
         drops.clear();
         for (int i = 0; i < collected.length; i++) collected[i] = 0;
         score = 0;
@@ -2020,8 +2102,17 @@ public final class Game implements GameThread.Host {
      * 于是滑行段与点火段在画面上分得开：弹链的"形态先于颜色"这条在这里仍然成立。
      */
     private void drawMissiles(Canvas c) {
-        for (int i = 0; i < missiles.activeCount(); i++) {
-            Missiles.Missile m = missiles.activeAt(i);
+        // 两条流**同一条画法**：形状与颜色都取自出膛那一刻的武器模板（格斗弹没有第二套外观，
+        // 那是他没说过的东西，不在这儿发明）。真机如果分不清哪个池在飞，再谈加不加标记。
+        drawMissilePool(c, missiles);
+        drawMissilePool(c, dogfightMissiles);
+        fill.setAlpha(255);
+    }
+
+    /** 一流弹的绘制。⚠ 与 {@link #stepPool} 一样按池调用，两池共用这一份像素口径。 */
+    private void drawMissilePool(Canvas c, Missiles pool) {
+        for (int i = 0; i < pool.activeCount(); i++) {
+            Missiles.Missile m = pool.activeAt(i);
             stroke.setColor(m.color);
             c.drawLine(m.px, m.py, m.x, m.y, stroke);
             fill.setColor(m.color);
@@ -2033,7 +2124,6 @@ public final class Game implements GameThread.Host {
                 c.drawRect(rf, fill);
             }
         }
-        fill.setAlpha(255);
     }
 
     /**

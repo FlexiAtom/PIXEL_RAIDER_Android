@@ -75,6 +75,10 @@ public final class ShopScreen {
     private static final String L_UNIT_COUNT = "枚";
     /** 扳机卡的单位：它 2026-09-26 起卖的是发数，不是射速百分比。 */
     private static final String L_UNIT_SHOTS = "发";
+    /** 机动过载的单位：它每级放宽的是视场张角，卡面按**度**读（半径那一半在二次点火那张上，按 px 读）。 */
+    private static final String L_UNIT_DEG = "度";
+    /** 中段引导的核心位：买断一个机制，没有数可画（{@code CORE_UNLOCK}）。 */
+    private static final String L_UNLOCK = "解锁";
     /** 三个汉字的宽度按 12px 网格算死：为了一句右对齐去问 TextCache 要位图，不值。 */
     private static final int MAXED_W = 3 * Md3.PX_LABEL;
 
@@ -372,6 +376,17 @@ public final class ShopScreen {
             case ShopRules.CORE_CHOICE:
                 kit.baked(c, L_CHOICE, Md3.PX_LABEL, Md3.primary(), x, cy, alpha, true);
                 return;
+            case ShopRules.CORE_UNLOCK:
+                kit.baked(c, L_UNLOCK, Md3.PX_LABEL, Md3.primary(), x, cy, alpha, true);
+                return;
+            case ShopRules.CORE_PX:
+                // "px" 两个字母是 ASCII，直接进点阵那一串，不必像汉字单位那样另烤一张字图。
+                hud.reset().chr('+').num(Math.round(v)).text("px");
+                break;
+            case ShopRules.CORE_DEG:
+                hud.reset().chr('+').num(Math.round(v));
+                unit = L_UNIT_DEG;
+                break;
             default:
                 kit.baked(c, L_READY, Md3.PX_LABEL, Md3.primary(), x, cy, alpha, true);
                 return;

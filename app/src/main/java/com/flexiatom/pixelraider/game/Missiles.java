@@ -104,6 +104,17 @@ public final class Missiles {
         /** 装订成功了吗。射前雷达锥里没有可装订的目标 ⇒ false，此后一路直飞到寿命/出界。 */
         public boolean unitSet;
         /**
+         * 射前雷达**装订**的那一只敌人的槽号（簇 II「中段引导」要逐帧追的就是它）。
+         *
+         * <p>它与 {@link #targetSlot} 是**两个独立的名词**：装订只回答"往哪飞"，不锁、不占目标
+         * （mode0 那一段一路直飞，进圈才竞争）；只有 {@code targetSlot} 进
+         * {@code MissileBehavior} 的占用位图。两个字段合成一个的话，中段引导就会顺手把目标占走，
+         * 多枚弹朝同一只飞的场景当场消失。
+         */
+        public int boundSlot;
+        /** {@link #boundSlot} 的代次戳，判法与 {@link #targetBorn} 同（槽会被 free-list 复用）。 */
+        public long boundBorn;
+        /**
          * 开眼了吗：弹与 {@link #unitX}/{@link #unitY} 的距离进 {@code Balance.missile.seekerRange}
          * 那一刻置位，**置位前不索敌、不转向、不累 seekT**（L40027 裁的"装订段按设计字面直飞"）。
          */
@@ -125,6 +136,8 @@ public final class Missiles {
             color = 0;
             targetSlot = NO_TARGET;
             targetBorn = 0L;
+            boundSlot = NO_TARGET;
+            boundBorn = 0L;
             unitX = 0f; unitY = 0f;
             unitSet = false;
             seekerOpen = false;
@@ -227,6 +240,8 @@ public final class Missiles {
         to.color = from.color;
         to.targetSlot = from.targetSlot;
         to.targetBorn = from.targetBorn;
+        to.boundSlot = from.boundSlot;
+        to.boundBorn = from.boundBorn;
         to.unitX = from.unitX; to.unitY = from.unitY;
         to.unitSet = from.unitSet;
         to.seekerOpen = from.seekerOpen;

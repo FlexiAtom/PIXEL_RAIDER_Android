@@ -53,9 +53,15 @@ public final class ShopRules {
      * <p>{@link #CORE_CHOICE} 是「随机强化」（2026-10-01）加的第六档：它没有数值可显示，
      * 卡面要说的是"四样里抽一样"这件事本身。**特意不走 default**——default 那一路画
      * 「立即就绪」，那是给冷却制卡片用的话，画在一张"立即给你一种增益"的卡上是一句上屏的假话。
+     *
+     * <p>后三档同族，都是簇 II 三张导弹卡（2026-10-01 实现授权）带来的新单位：
+     * {@link #CORE_UNLOCK} 和 {@link #CORE_CHOICE} 一样**没有数**（中段引导是买断机制），
+     * {@link #CORE_PX}／{@link #CORE_DEG} 则是两个**只在导引头上有意义的离散量**——
+     * 它们不能并入 {@code CORE_POINTS}，"点"在 HUD 里已经被生命/伤害占走，
+     * 把「+25 点」印在一张加长雷达扇形的卡上会让玩家以为那是伤害。
      */
     public static final int CORE_PERCENT = 0, CORE_POINTS = 1, CORE_COUNT = 2, CORE_INSTANT = 3,
-            CORE_SHOTS = 4, CORE_CHOICE = 5;
+            CORE_SHOTS = 4, CORE_CHOICE = 5, CORE_UNLOCK = 6, CORE_PX = 7, CORE_DEG = 8;
 
     /**
      * 商店的两个入口。他的逐字（2026-09-30 直发）：「我提议，波次结束的商店仅提供弹药补给、护盾、
@@ -153,6 +159,12 @@ public final class ShopRules {
             case Balance.ShopCard.RANDOM: return 0f;     // 同上：卖的是"抽一种"，不是某个数
             case Balance.ShopCard.MAGNET: return k.magnetPerLevel;
             case Balance.ShopCard.GREED: return k.coinPerLevel;
+            // 簇 II 四张：这里的"每级的量"是**卡面显示值**，真正生效的加法在 ShopRun 那几个读数里，
+            // 两边都读同一格 Balance.shop 字段，所以不存在"写着 +25、实发 +30"那种分裂。
+            case Balance.ShopCard.MID_COURSE: return 0f;   // 买断机制，没有数
+            case Balance.ShopCard.IGNITION: return k.seekerRangePerLevel;
+            case Balance.ShopCard.HANDLING: return k.seekerArcDegPerLevel;
+            case Balance.ShopCard.DOGFIGHT: return 0f;     // 同中段引导：买断一条流，没有数
             default: return 0f;
         }
     }
@@ -175,6 +187,12 @@ public final class ShopRules {
             case Balance.ShopCard.HULL: return k.hullMaxLevel;
             case Balance.ShopCard.MAGNET: return k.magnetMaxLevel;
             case Balance.ShopCard.GREED: return k.coinMaxLevel;
+            // 簇 II 四张都有上限：中段引导与格斗导弹是**买断**（1 级），另两张是"级数换半径/角度"。
+            // 满级后由 isValid 顶部那道 maxLevelOf 检查自动下架，不靠货架端特判。
+            case Balance.ShopCard.MID_COURSE: return k.midCourseMaxLevel;
+            case Balance.ShopCard.IGNITION: return k.seekerRangeMaxLevel;
+            case Balance.ShopCard.HANDLING: return k.handlingMaxLevel;
+            case Balance.ShopCard.DOGFIGHT: return k.dogfightMaxLevel;
             default: return UNLIMITED;
         }
     }
@@ -194,6 +212,10 @@ public final class ShopRules {
             case Balance.ShopCard.SALVO:
             case Balance.ShopCard.SURGE:
             case Balance.ShopCard.RANDOM:
+            case Balance.ShopCard.MID_COURSE:
+            case Balance.ShopCard.DOGFIGHT:
+                // 中段引导与格斗导弹都是买断：只有"买过/没买过"两态，而买过之后这张卡就下架了，
+                // 所以「Lv 0」是它唯一会上屏的一行废话——判据仍是那条"收益随不随累计等级变多"。
                 return false;
             default:
                 return true;
@@ -511,6 +533,14 @@ public final class ShopRules {
                 return CORE_COUNT;
             case Balance.ShopCard.RANDOM:
                 return CORE_CHOICE;                // 没有数，只有"四选一"这件事
+            // 簇 II 四张**必须显式写死**：default 那一路画「立即就绪」，而这四张没有一样是立即的。
+            case Balance.ShopCard.MID_COURSE:
+            case Balance.ShopCard.DOGFIGHT:
+                return CORE_UNLOCK;                // 买断一个机制，卡面只说"解锁"
+            case Balance.ShopCard.IGNITION:
+                return CORE_PX;                    // 每级加长的是导引头半径（px）
+            case Balance.ShopCard.HANDLING:
+                return CORE_DEG;                   // 每级放宽的是视场总夹角（度）
             default:
                 return CORE_INSTANT;
         }

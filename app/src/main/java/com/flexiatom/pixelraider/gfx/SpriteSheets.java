@@ -58,6 +58,17 @@ public final class SpriteSheets {
     public static final int ID_SHOP_HULL = 23;
     public static final int ID_SHOP_MAGNET = 24;
     public static final int ID_SHOP_RANDOM = 25;
+    // 簇 II 的导弹卡（2026-10-01 实现授权）：id 续 25 之后，不复用掉落图标——四张都是机制卡，
+    // 形状要说得出"弹道"，而 HP/盾/币那几枚说的是"补给"。
+    public static final int ID_SHOP_MID = 26;
+    public static final int ID_SHOP_IGN = 27;
+    public static final int ID_SHOP_HAND = 28;
+    /**
+     * 簇 II 第四张：格斗导弹。它跟上面三张**不是一类图标**——那三张印的是"导引头/弹道"的机制，
+     * 这一张印的是**另一条弹体池**的弹（短粗、大三角翼＝高舵效）。它没有可成长的数（买断），
+     * 所以卡面只有一句"解锁"，形状是它唯一的读数。
+     */
+    public static final int ID_SHOP_DOG = 29;
 
     /** 玩家机：11×11，机头朝上（朝向由实际位移旋转绘制，不在网格里画四个方向）。 */
     public static final String[] SHIP = {
@@ -392,6 +403,64 @@ public final class SpriteSheets {
             ".0000000.",
     };
 
+    /** 中段引导：一枚**弯的**箭头——弹道从左下角弯上来、顶端指向正上方（"没开眼也在转向"的形状读法）。 */
+    public static final String[] SHOP_MID = {
+            ".........",
+            "....0....",
+            "...040...",
+            "..04440..",
+            "...04....",
+            "..04.....",
+            ".04......",
+            "04.......",
+            ".........",
+    };
+
+    /** 二次点火：弹体在上、尾下一道宽的火花带（第一次点火是弹，第二次是那道爆开的焰）。 */
+    public static final String[] SHOP_IGN = {
+            "....0....",
+            "...040...",
+            "..04440..",
+            "..04440..",
+            "...040...",
+            "..0.0.0..",
+            ".0404040.",
+            "..0...0..",
+            ".........",
+    };
+
+    /** 机动过载：从底部一点向上张开的一对角壁（视场放宽的形状），比 {@link #SHOP_SPEED} 的实心尾焰空。 */
+    public static final String[] SHOP_HAND = {
+            "0.......0",
+            "04.....40",
+            ".04...40.",
+            ".04...40.",
+            "..04.40..",
+            "...040...",
+            "...040...",
+            "....0....",
+            "....0....",
+    };
+
+    /**
+     * 格斗导弹：一枚**短粗的大三角翼**弹——机头在上，第 4/5 行那对摊到格边的翅膀是它全部的辨识度。
+     *
+     * <p>形状为什么选"翼"而不是又一条弹道或又一个扇形：这张卡卖的是<b>高舵效</b>（他的字「自带高过载
+     * 和舵效」，L36568/L36897），而那在图标上唯一可读的写法就是翼面积；{@link #SHOP_MID} 已经占了
+     * "弯弹道"、{@link #SHOP_HAND} 已经占了"张角"，再画一条会撞成两张同一句话。
+     */
+    public static final String[] SHOP_DOG = {
+            "....0....",
+            "...040...",
+            "..04440..",
+            "..04440..",
+            "0.04440.0",
+            "040444040",
+            ".0.040.0.",
+            "...040...",
+            "....0....",
+    };
+
     /**
      * 按**玩法枚举的序号**索引的网格表：小怪读 {@code Balance.Enemy.STRAIGHT..BURSTER}、
      * Boss 读 {@code Balance.Boss.DESTROYER..FORTRESS}、掉落读 {@code Drops.CHIP..BOMB}。
@@ -417,8 +486,9 @@ public final class SpriteSheets {
             ID_CHIP, ID_COIN, ID_HP, ID_SHIELD, ID_POWERUP, ID_BOMB,
     };
     /**
-     * 商店卡图标：下标对齐 {@code Balance.ShopCard.FIREPOWER..RANDOM}。五张一次性补给卡复用
-     * 掉落图标（HP/盾/炸弹/能量/金币），所以这里**不是**每个 id 一张新网格，而是同形状的第二次引用。
+     * 商店卡图标：下标对齐 {@code Balance.ShopCard} 的 id 常量（FIREPOWER..RANDOM，再加簇 II 的
+     * MID_COURSE/IGNITION/HANDLING/DOGFIGHT）。五张一次性补给卡复用掉落图标（HP/盾/炸弹/能量/金币），
+     * 所以这里**不是**每个 id 一张新网格，而是同形状的第二次引用。
      *
      * <p>⚠ 这两条数组与卡表是**按下标**绑死的：加一张卡必须同时在这里尾上加一格，否则新卡会画成
      * 第 0 张（{@code shopIconSheet} 越界退回首项），表现是"图标错了"而不是崩溃——不会有任何东西替你响。
@@ -427,11 +497,13 @@ public final class SpriteSheets {
             SHOP_FIRE, SHOP_RATE, SHOP_CRIT, SHOP_SPEED, SHOP_HULL,
             DROP_HP, DROP_SHIELD, DROP_BOMB, DROP_POWERUP, SHOP_MAGNET, DROP_COIN,
             SHOP_RANDOM,
+            SHOP_MID, SHOP_IGN, SHOP_HAND, SHOP_DOG,
     };
     public static final int[] SHOP_ICON_IDS = {
             ID_SHOP_FIRE, ID_SHOP_RATE, ID_SHOP_CRIT, ID_SHOP_SPEED, ID_SHOP_HULL,
             ID_HP, ID_SHIELD, ID_BOMB, ID_POWERUP, ID_SHOP_MAGNET, ID_COIN,
             ID_SHOP_RANDOM,
+            ID_SHOP_MID, ID_SHOP_IGN, ID_SHOP_HAND, ID_SHOP_DOG,
     };
 
     public static int widthOf(String[] rows) {
