@@ -42,11 +42,20 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-> `gradle/wrapper/gradle-wrapper.properties` 用的是官方地址
-> `https://services.gradle.org/distributions/gradle-8.13-bin.zip`，所以**克隆后第一次 `./gradlew` 会去下载
-> Gradle 8.13 的发行包**（约 140MB，落在 `~/.gradle/wrapper/dists/`，之后离线复用）。
-> 完全离线的构建环境请自行取那只 zip，再用 `gradle wrapper` 重生成 wrapper 文件——
-> 别把 `distributionUrl` 改成某台机器的本地路径：那会让每个克隆者都拿不到 Gradle。
+> `gradle/wrapper/gradle-wrapper.properties` 里的 `distributionUrl` 是**相对地址** `gradle-8.13-bin.zip`。
+> Gradle 按 wrapper jar 的同级目录解析它（实测与当前目录无关），所以**每台机器把自己那份 Gradle 8.13
+> 发行包摆进 `gradle/wrapper/`**，构建用的就是本地那一份，不需要联网：
+>
+> ```bash
+> cp ~/gradle-8.13-bin.zip gradle/wrapper/         # 没有的话先从官方地址下一份
+> ```
+>
+> 那只 zip 已被 `.gitignore` 收掉：官方 bin 包实测 136,983,045 字节（130.6 MiB），超 GitHub 单文件
+> 100 MiB 的拒推硬限，本来也进不了仓库。没摆 zip 时 `./gradlew` 报 `FileNotFoundException`，
+> 指的就是这个路径——那是提示缺文件，不是配置坏了。
+> 想让克隆者自动从公网下载也可以，把 `distributionUrl` 换成
+> `https\://services.gradle.org/distributions/gradle-8.13-bin.zip` 即可（首次构建联网，之后落
+> `~/.gradle/wrapper/dists/` 离线复用）。
 
 `local.properties` 里写一行 `sdk.dir=<你的 Android SDK 路径>`（该文件不入库，各人本机各配一份）。
 

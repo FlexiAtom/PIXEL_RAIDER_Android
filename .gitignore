@@ -20,6 +20,12 @@ build/
 .gradle/
 local.properties
 
+# Gradle 发行包各人自备：`gradle-wrapper.properties` 给的是**相对**地址，Gradle 按
+# wrapper jar 的同级目录解析（实测与 cwd 无关），所以每个人摆进自己本地的 zip 就用自己那份。
+# 官方 bin zip 实测 136,983,045 B（130.6 MiB），超 GitHub 单文件 100 MiB 硬限，本来也进不来。
+gradle/wrapper/*.zip
+gradle/wrapper/*.zip.sha256
+
 # 文档与非源码扩展名默认不入库——以后新补的笔记／导出物不会被无声漏掉。
 # 他逐字（2026-10-01）：「把 .md .txt .xml .gradle .gradlew .bat 加进去，但要排除
 # LICENSE、README、AGENTS、.editorconfig 之类，不然以后补的文件又要漏掉一次」。
