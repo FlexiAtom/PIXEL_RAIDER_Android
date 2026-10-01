@@ -42,10 +42,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-> ⚠ **`gradle/wrapper/gradle-wrapper.properties` 的 `distributionUrl` 目前指向维护者本机的一个
-> zip 文件**（离线构建留下的），克隆到别的机器上 `./gradlew` 会拿不到 Gradle。外部构建请把它改成
-> 官方地址 `https://services.gradle.org/distributions/gradle-8.13-bin.zip`，
-> 或先自行下载 Gradle 8.13 后用 `gradle wrapper` 重新生成。
+> `gradle/wrapper/gradle-wrapper.properties` 用的是官方地址
+> `https://services.gradle.org/distributions/gradle-8.13-bin.zip`，所以**克隆后第一次 `./gradlew` 会去下载
+> Gradle 8.13 的发行包**（约 140MB，落在 `~/.gradle/wrapper/dists/`，之后离线复用）。
+> 完全离线的构建环境请自行取那只 zip，再用 `gradle wrapper` 重生成 wrapper 文件——
+> 别把 `distributionUrl` 改成某台机器的本地路径：那会让每个克隆者都拿不到 Gradle。
 
 `local.properties` 里写一行 `sdk.dir=<你的 Android SDK 路径>`（该文件不入库，各人本机各配一份）。
 
