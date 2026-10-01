@@ -112,7 +112,7 @@ app/src/main/java/com/flexiatom/pixelraider/
 
 - **本仓库原创代码**：GNU Affero General Public License v3.0 or later
   （`SPDX-License-Identifier: AGPL-3.0-or-later`）。每个自有文本文件头部一行 SPDX ＋ 版权块；
-  `LICENSE.txt` 是许可证原文（662 行，FSF 出品），按惯例**不加**我们的 SPDX／版权头——加上就成冒领。
+  `LICENSE` 是许可证原文（662 行，FSF 出品），按惯例**不加**我们的 SPDX／版权头——加上就成冒领。
 - **内嵌字体**：`app/src/main/assets/fonts/pr-cjk-12px.otf`，为
   [Fusion Pixel 12px Mono](https://github.com/TakWolf/fusion-pixel-font)（TakWolf）zh_hans 2026.09.25
   的子集，SIL Open Font License 1.1。随附许可证原文与子集说明在同目录 `LICENSE.txt`。
