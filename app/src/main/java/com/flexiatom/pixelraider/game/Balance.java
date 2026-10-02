@@ -764,14 +764,18 @@ public final class Balance {
     public static final class Shop {
         /**
          * [规格] 每波三选一。张数历史：11 → 12（「随机强化」）→ 15（簇 II 的三张导弹构筑卡）
-         * → 16（簇 II 第四件「格斗导弹」）。
+         * → 16（簇 II 第四件「格斗导弹」）→ 18（两张武器解锁卡「基础导弹」「基础激光」）。
          *
          * <p>⚠ 加一张卡要同步动的地方比这一行多：{@code ShopCard} 的 id 常量与 {@code makeAll()}、
          * {@code SpriteSheets} 的两条图标数组（按下标绑死，漏一格就画成第 0 张的图）、
          * {@code ShopRules} 的四个 switch、以及 {@code ShopRulesTest} 里钉死的**两侧张数与 id 序列**。
          * 前三处漏了都会安静地画错/读错，只有最后一处会红——所以别把那条测试改成"从表里数"。
+         *
+         * <p>⚠ 两张**武器解锁**卡还多第五处：{@code ShopRun.weaponUnlocked} 里那对（武器 id ↔ 卡 id）。
+         * 它没有 switch 会被遍历到，漏登记的表现是"卡买了、货架上下架了、武器却仍然切不进去"——
+         * 每一层单独看都自洽，所以他实测报的那条（「格斗导弹购买后无效果」）就是这么来的。
          */
-        public static final int CARDS = 16;
+        public static final int CARDS = 18;
         public static final int OFFER = 3;
         /**
          * 回合结束那个商店的价格乘子（I-3）。
@@ -901,6 +905,19 @@ public final class Balance {
          * "读 ShopRun 的等级"，不是"烙进配置表"（同 {@code MissileBehavior.beginFrame} 那条理由）。
          */
         public int dogfightMaxLevel = 1;
+        /**
+         * 两张**武器解锁卡**（「基础导弹」「基础激光」）的档数：**1**（买断），与
+         * {@link #midCourseMaxLevel} 同一形状——它们卖的也是机制（这一把枪在不在飞机上），不是量。
+         *
+         * <p>两张共用这一个字段是刻意的：它们之间没有任何一方需要独立调档（"激光能买两级"
+         * 不是一种可解释的商品），各写一个 {@code = 1} 只会多出一次"改了其中一张忘了另一张"。
+         *
+         * <p>入池依据是他的逐字（2026-10-02）「商店新增『基础导弹』和『基础激光』」——这句话补的是
+         * **获取途径**那一半：{@link Balance#weapons} 里那六把从来没有哪一处卖过，触屏又没有
+         * 切枪入口，于是 {@code Game} 里那条 {@code dogfightOn() && player.weapon().guided}
+         * 在读表上恒假，「格斗导弹」买下去场上纹丝不动（他实测报的正是这条）。
+         */
+        public int weaponUnlockMaxLevel = 1;
 
         /** 一次性补给卡的固定量。 */
         public int repairAmount = 40;
@@ -931,7 +948,11 @@ public final class Balance {
                 MID_COURSE = 12, IGNITION = 13, HANDLING = 14,
                 // 簇 II 第四件（2026-10-01）。不叫 DOGFIGHT_MISSILE：这张表里所有 id 都是**卡**的名字，
                 // 弹那一侧的字段一律走 Balance.Missile.dogfight* 前缀，两边共用 DOGFIGHT 这一个词根。
-                DOGFIGHT = 15;
+                DOGFIGHT = 15,
+                // 两张**武器解锁卡**（2026-10-02，他的逐字裁「商店新增『基础导弹』和『基础激光』」）。
+                // 名字里那个"基础"是他给的词，指的是**这一把枪本身**，不是"低配版"：它与「格斗导弹」
+                // 的关系是"先有这条流，才谈得上给这条流加卡"——那四张构筑卡全都挂在它上面。
+                BASIC_MISSILE = 16, BASIC_LASER = 17;
 
         public final int id;
         public final String name;
@@ -1109,6 +1130,31 @@ public final class Balance {
                         // ⚠ 「自爆」两个字在这里是**玩法词**（脱锁即展开战斗部，L37108），与
                         // {@code Burster} 那类"自爆怪"是两个东西；两侧共用一个词根的这条撞名如实登记。
                         com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_DOG, 90, 0),
+                new ShopCard(BASIC_MISSILE, "基础导弹",
+                        "解锁导弹，切枪键里会有它",
+                        "导弹这一把本来不在飞机上，买一级就有了；导弹流那四张卡要等到这一步之后"
+                                + "才有东西可改。",
+                        // 「构筑」两个字在这里说不成：子集里没有「筑」（U+7b51，EmbeddedFontTest 现抓），
+                        // 而为一个卡面短语重切字体不划算——那句话的主语本来就是"那四张卡"。
+                        // 卖不卖武器、叫什么名，是他的字（2026-10-02 逐字「商店新增『基础导弹』和
+                        // 『基础激光』」）；**价格 55 与 tip 措辞是我的**。
+                        // 55/0 的判据：这张是整条导弹流的闸门，簇 II 那四张（70/60/45/90）全挂在它后面，
+                        // 闸门比比它下游最便宜的一张（机动过载 45）贵一档、比最贵的（格斗导弹 90）便宜，
+                        // 于是"先开闸、再添档"这条顺序在钱包上是走得通的。
+                        // ⚠ 卡买下去之后**不自动换枪**：切枪是玩家的动作（他给的是"加个切换键"，
+                        // 不是"买了就装上"），自动换会把他正按着的弹道换掉，那一下比不切更难解释。
+                        com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_MISSILE, 55, 0),
+                new ShopCard(BASIC_LASER, "基础激光",
+                        "解锁激光，切枪键里会有它",
+                        "激光这一把本来不在飞机上，买一级就有了；单发伤害低但射速快，"
+                                + "且每级加一那张卡不发弹给它。",
+                        // 同上：名字是他的，**价格 40 与文案是我的**。40 比导弹闸门低一档的理由是形状：
+                        // 激光 damage=1、fireGap=0.09（六把里最快），而导弹 damage=6、pellets=2 且走
+                        // 独立仿真池——同一次"解锁"在场上给出来的东西不对等，闸门价跟着不对等。
+                        // 这一把不吃 {@code pelletPerLevel}（例外只写在 {@code ShopRun.pelletBonus}
+                        // 一处），那句话对玩家可见的渠道是「每级加一」自己的 tip（「激光不吃」），
+                        // 所以这张卡的文案只说"不发弹给它"，不重述那条例外。
+                        com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_BEAM, 40, 0),
             };
         }
     }

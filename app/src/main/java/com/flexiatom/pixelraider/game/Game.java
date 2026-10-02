@@ -202,6 +202,9 @@ public final class Game implements GameThread.Host {
     /** 炸弹按钮：绘制框在 HUD 相对坐标，命中框另加 hudTop（与暂停按钮同一套换算）。 */
     private final RectI bombDraw = new RectI();
     private final RectI bombHit = new RectI();
+    /** 切枪键：与炸弹键同一套换算（绘制框 HUD 相对、命中框加 hudTop），也摆在同一条底线。 */
+    private final RectI switchDraw = new RectI();
+    private final RectI switchHit = new RectI();
     private final InputRouter.Event ev = new InputRouter.Event();
     private final int[] firedCommands = new int[4];
 
@@ -391,6 +394,9 @@ public final class Game implements GameThread.Host {
         HudLayout.bombRect(m.battleHeight(), bombDraw);
         Widgets.hitRect(bombDraw, hitBoxLogic, bombHit);
         bombHit.offsetInPlace(0, m.hudTop());
+        HudLayout.switchRect(m.battleHeight(), switchDraw);
+        Widgets.hitRect(switchDraw, hitBoxLogic, switchHit);
+        switchHit.offsetInPlace(0, m.hudTop());
         result.layout(hitBoxLogic, m.pageTop(result.pageHeight()), m.logicH);
         // 三张固定页各自报整页高，居中原点由 pageTop 给（口径同结算页，不跟着战场长高）
         menu.layout(hitBoxLogic, m.pageTop(menu.pageHeight()), m.logicH);
@@ -762,6 +768,15 @@ public final class Game implements GameThread.Host {
             openPause();
             return;
         }
+        // 切枪键排在炸弹**之前**判：两枚键的命中框都由 hitRect 按中心外扩到 48dp 下限，
+        // 低分辨率屏（外扩量 ≥ 42）上中间那 8 格净空会被咬掉，此时必须让误判落在换枪那一侧——
+        // 它只多一次震动，而反过来是把一件存了整波的炸弹点没了。判据与几何都在 HudLayout.switchRect。
+        // 另一处不对称是顺带说清的：这一枚不像炸弹那样配"没存货就不注册命中"的条件——这一圈上
+        // 永远还有下一把（四把默认枪不挂闸门，那条循环钉在 ShopRulesTest 的"每按一次必换"）。
+        if (switchHit.contains(x, y)) {
+            selectWeapon(shopRun.nextUnlockedWeapon(player.weaponId));
+            return;
+        }
         // 没有存货就不注册命中：一颗点不动的按钮比没有按钮更糟（规格点名的"点了没反应"bug 类）
         if (bombs > 0 && bombHit.contains(x, y)) {
             detonateBomb();
@@ -969,9 +984,18 @@ public final class Game implements GameThread.Host {
         }
     }
 
-    /** 换枪不清掉已经在飞的弹：玩家的主动投资不该被自己的一键取消。 */
+    /**
+     * 换枪不清掉已经在飞的弹：玩家的主动投资不该被自己的一键取消。
+     *
+     * <p>这一处同时是**持有量的闸门**：键盘 1..6 与底部切枪键都汇到这里，所以"没买过的枪按下去
+     * 会不会响"只有一条答案。⚠ 它今天才开始拦键盘——原先六把枪全都能按，而其中两把从来没在
+     * 商店里卖过（{@code ShopRun.weaponUnlocked}），于是键盘是唯一的获取途径、触屏压根没有。
+     * 拦完之后键盘与触屏读的是同一个持有集合：调试要先看到导弹，就去商店买那一张「基础导弹」，
+     * 而不是在这里给键盘留一条绕过闸门的近路（留了就有两个真源，而"哪把枪能按"正是这次出问题的地方）。
+     */
     private void selectWeapon(int id) {
         if (id < 0 || id >= Balance.weapons.length || id == player.weaponId) return;
+        if (!shopRun.weaponUnlocked(id)) return;
         player.weaponId = id;
         if (haptics != null) haptics.tick();
     }
@@ -1781,6 +1805,9 @@ public final class Game implements GameThread.Host {
         // 未来有人改成重新分配——挂错数组的表现是"买了卡但乘子不动"，最难查的那类）。
         shopRun.reset();
         shopSnap.level = shopRun.levels();
+        // 持有量清零之后，手里那把也可能已经不存在了：不钳回"局内一定有的那一把"，下一局开局就在
+        // 打这一局没买过的导弹——那是"买了没效果"的反向版本（没买却有），同样没法解释也测不出来。
+        if (!shopRun.weaponUnlocked(player.weaponId)) player.weaponId = Balance.Weapon.PULSE;
         lastFlowPhase = WaveFlow.PREP;
         shopPending = false;
         shake = 0f;
@@ -1961,6 +1988,7 @@ public final class Game implements GameThread.Host {
             drawTopRow(c);
             drawStatusRow(c);
             drawBombButton(c);
+            drawSwitchButton(c);
             drawBossBar(c);
             // 暂停面板不接管 HUD：它靠 0.78 遮罩把整套读数压成背景，视线才落在面板的卡上
             if (modal == ModalStack.NONE) drawFpsPanel(c);
@@ -2217,6 +2245,28 @@ public final class Game implements GameThread.Host {
         font.draw(c, num.buffer(), num.length(),
                 bombDraw.left + HudLayout.BOMB_PAD + HudLayout.BOMB_ICON + HudLayout.BOMB_NUM_GAP,
                 mid - BitmapFont.GLYPH_H / 2, text);
+    }
+
+    /**
+     * 切枪键：框里印**当前这一把**的名字，点一下换到下一把**买过的**。
+     *
+     * <p>画"手里是什么"而不是"下一次换成什么"：这一格同时是场上那条弹道的署名——玩家低头确认
+     * 自己正在打什么的那一眼，比预知下一把有用（而且下一把要等他真按了才算数）。
+     *
+     * <p>名字着色用武器自己的 {@code color}（{@code Balance.Weapon} 那一格），于是键上的字与
+     * 飞出去的弹是同一个颜色：形状先于颜色，但颜色在这里是**对应关系**的免费提示，
+     * 不必再画一个图标去说"这是枪"。字面量就是武器表的 name，不新增文案 ⇒ 没有第二个真源。
+     */
+    private void drawSwitchButton(Canvas c) {
+        fill.setColor(Ink.EDGE);
+        rf.set(switchDraw.left, switchDraw.top, switchDraw.right, switchDraw.bottom);
+        c.drawRect(rf, fill);
+        Balance.Weapon w = player.weapon();
+        Bitmap label = uiText.bake(w.name, UI_PX, w.color);
+        text.setColor(w.color);
+        SpriteFactory.draw(c, label, switchDraw.centerX() - label.getWidth() / 2,
+                switchDraw.centerY() - label.getHeight() / 2,
+                label.getWidth(), label.getHeight(), text);
     }
 
     /**

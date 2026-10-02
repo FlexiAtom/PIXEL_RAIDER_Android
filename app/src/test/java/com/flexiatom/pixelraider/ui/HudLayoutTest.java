@@ -184,6 +184,63 @@ public class HudLayoutTest {
         assertTrue("按钮顶到了 Boss 血条", C.top > HudLayout.BOSS_BOTTOM);
     }
 
+    /**
+     * 切枪键（他 2026-10-02 逐字「切换在炸弹附近（总之是底部），加个切换键」）。
+     *
+     * <p>三组数各挡一种错法：
+     * <ul>
+     *   <li><b>同底线、同宽、同高</b>（手推 158..192 × 294..314）：底部那一组必须看起来是<b>一对键</b>，
+     *       长歪的一枚会被读成"屏幕上另一个东西"而不是"另一个能按的键"。</li>
+     *   <li><b>绘制框不相交</b>（192 &lt; 200，中间净空 {@code SWITCH_GAP} = 8 格）：两框一叠，
+     *       玩家按下时看到的描边就是一整块，那已经不是两个键了。</li>
+     *   <li><b>各自的中心不落在对方的框里</b>：这条才是命中判定真正的依据。{@code Widgets.hitRect}
+     *       按<b>中心</b>外扩到 48dp 下限，外扩量 {@code T} 由屏幕密度算出来，{@code T ≥ 42} 的
+     *       低分辨率屏上两条命中框会在中间那 8 格咬上——但咬上的是两键<b>之间</b>那段，
+     *       两键自己的落点仍各自归属自己（中心在框内 ⇒ 外扩后的框以中心对称）。
+     *       剩下那一段重叠谁赢，由 {@code Game.onPointerDown} 的判定顺序定（切枪在前，
+     *       误判方向是"多震一下"而不是"炸掉一件存了整波的手牌"）。</li>
+     * </ul>
+     */
+    @Test
+    public void switchKeySharesTheBombBaselineAndKeepsItsOwnCenter() {
+        HudLayout.switchRect(320, A);
+        assertEquals(158, A.left);
+        assertEquals(294, A.top);
+        assertEquals(192, A.right);
+        assertEquals(314, A.bottom);
+        HudLayout.bombRect(320, B);
+        assertEquals("与炸弹不同一条底线", B.bottom, A.bottom);
+        assertEquals("与炸弹不同一条顶线", B.top, A.top);
+        assertEquals("底部那一对必须看起来是一对", B.width(), A.width());
+        assertTrue("两枚键的绘制框咬上了", A.right < B.left);
+        // 中心各自留在自己框内（左右两侧都留出台阶，才谈得上"命中框按中心归属"）
+        assertTrue("切枪键的中心越进了炸弹框", (A.left + A.right) / 2 < B.left);
+        assertTrue("炸弹键的中心越进了切枪框", (B.left + B.right) / 2 > A.right);
+        // 跟着战斗区底边长（高屏那一档），且不留在 320 那一档
+        HudLayout.switchRect(533, C);
+        assertEquals(527, C.bottom);
+        assertEquals(A.height(), C.height());
+        assertEquals("横向不跟着屏高长", A.left, C.left);
+        assertTrue("键顶到了 Boss 血条", A.top > HudLayout.BOSS_BOTTOM);
+    }
+
+    /**
+     * 键上印的是<b>当前这把</b>的名字（复用 {@code Balance.Weapon.name}，不新增文案字面量，
+     * 所以这条顺带把"六个卡名各是两个字"这件事变成几何前提）。
+     *
+     * <p>12px 汉字是一字一格，两字 24 格、装得进 34 格宽；哪天真把「脉冲」改成「脉冲弹」，
+     * 36 &gt; 34 而标签是**居中**画的——它不裁切，而是从两侧各溢出一点，压到战斗区里去。
+     * 这条断的是那个改名的动作得同时改这里。
+     */
+    @Test
+    public void everyWeaponNameFitsTheSwitchKey() {
+        for (com.flexiatom.pixelraider.game.Balance.Weapon w
+                : com.flexiatom.pixelraider.game.Balance.weapons) {
+            assertTrue(w.name + " 在切枪键上画不下（一字一格 ×12）",
+                    w.name.length() * 12 <= HudLayout.SWITCH_W);
+        }
+    }
+
     @Test
     public void trailWidthIsTheLostHpItself() {
         // 满条没有残影；掉 10% 血时残影段恰好等于那 10%（88 * 0.1 = 8.8 → 9）

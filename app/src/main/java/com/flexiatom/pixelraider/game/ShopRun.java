@@ -194,6 +194,51 @@ public final class ShopRun {
         return levelOf(Balance.ShopCard.DOGFIGHT) > 0;
     }
 
+    // ---- 武器持有（2026-10-02，他裁「商店新增『基础导弹』和『基础激光』」＋「加个切换键」）------
+    // 这一格之所以必须存在，是因为「格斗导弹」那张卡今天买下去场上什么都没发生：它开的判据是
+    // {@code dogfightOn() && player.weapon().guided}，而**制导那一把自己从来没卖过**——六把枪里
+    // 只有 MISSILE 的 guided 为真，通往它的唯一途径是物理键盘 1..6。买断卡有商品位、机制没有
+    // 获取途径，两层各自都自洽，所以没有一条断言响过（他实测报的就是这条）。
+
+    /**
+     * 这一把我现在**有没有**。出厂只有不需要买的那几把；{@code LASER} 与 {@code MISSILE} 是商品，
+     * 由两张解锁卡各买断一级。
+     *
+     * <p>判据写成 (武器 id → 卡 id) 的两行而不是 {@code Balance.Weapon} 上一个新字段：与
+     * {@link #pelletBonus(int)} 那条「激光不吃」同一形状——武器与商品的对应关系只在**持有量**
+     * 这一层有意义，烙进武器表就等于把商店的知识搬进配置表（那边一改价，这边不会跟着动）。
+     *
+     * @param weaponId {@link Balance.Weapon} 的武器 id
+     */
+    public boolean weaponUnlocked(int weaponId) {
+        if (weaponId == Balance.Weapon.LASER) return levelOf(Balance.ShopCard.BASIC_LASER) > 0;
+        if (weaponId == Balance.Weapon.MISSILE) return levelOf(Balance.ShopCard.BASIC_MISSILE) > 0;
+        return true;
+    }
+
+    /**
+     * 从 {@code currentId} 往后数**第一把我有的**，绕一圈。这一格只属于底部那枚切枪键；
+     * 键盘 1..6 报的是**绝对 id**，它走的是 {@code Game.selectWeapon} 那道闸门——两条路的
+     * 持有判据是同一个（{@link #weaponUnlocked}），所以"没买过的枪按下去会不会响"只有一个答案，
+     * 而"下一把换成谁"只有触屏需要算。
+     *
+     * <p>循环而不是列表：六把枪按 id 排开，玩家要的是一次点击换一把，不是打开一个选择面板——
+     * 后者在战斗里是两次点击加一次遮挡，而他给的是「加个切换键」（一个键）。
+     *
+     * <p>最后那句 {@code return currentId} 是**编译器要求的收尾**，不是一道防御：今天四把默认枪
+     * 永远解锁，所以这个循环按构造必定找到一把别的（{@code ShopRulesTest} 里那条"每按一次必换"
+     * 断的就是它）。真有一天有人把剩下三把也挂上闸门，那一格才第一次可达——届时它的语义是
+     * "只有一把枪时这枚键按了没反应"，那仍然不是一种错误，所以既不抛也不返回 -1。
+     */
+    public int nextUnlockedWeapon(int currentId) {
+        int n = Balance.weapons.length;
+        for (int k = 1; k < n; k++) {
+            int id = (currentId + k) % n;
+            if (weaponUnlocked(id)) return id;
+        }
+        return currentId;
+    }
+
     private float mul(int cardId, float perLevel) {
         return 1f + perLevel * levelOf(cardId);
     }

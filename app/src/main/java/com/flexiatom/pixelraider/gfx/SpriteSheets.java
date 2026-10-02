@@ -70,6 +70,17 @@ public final class SpriteSheets {
      * 所以卡面只有一句"解锁"，形状是它唯一的读数。
      */
     public static final int ID_SHOP_DOG = 29;
+    /**
+     * 两张武器解锁卡的图标（2026-10-02）。它们与上面四张**不是一类**：簇 II 那四张印的是导引头
+     * 与弹道参数（扇形、弯弹道、火化带），这两张印的是**弹体本身的形态**——因为这张卡卖的商品
+     * 就是"这一把枪在不在飞机上"，图标要说的是枪，不是它的某个旋钮。
+     *
+     * <p>两枚必须互相认得出：{@link #SHOP_MISSILE} 是细弹体＋**底部**那对小直翼（尾喷两缕），
+     * 与 {@link #SHOP_DOG} 那对摊到格边的中置大三角翼正好是一组对照（基础弹 vs 高舵效弹）；
+     * {@link #SHOP_BEAM} 用**断开的一截**画束，全表只有它有分段——长刃是它唯一的读点。
+     */
+    public static final int ID_SHOP_MISSILE = 30;
+    public static final int ID_SHOP_BEAM = 31;
 
     /** 玩家机：11×11，机头朝上（朝向由实际位移旋转绘制，不在网格里画四个方向）。 */
     public static final String[] SHIP = {
@@ -462,6 +473,32 @@ public final class SpriteSheets {
             "....0....",
     };
 
+    /** 基础导弹：细弹体一路到底，翼在**最下面**（与 {@link #SHOP_DOG} 的中置大三角翼成对照），底缘两缕尾喷。 */
+    public static final String[] SHOP_MISSILE = {
+            "....0....",
+            "...040...",
+            "...040...",
+            "...040...",
+            "...040...",
+            "...040...",
+            ".0.040.0.",
+            "040444040",
+            "..0...0..",
+    };
+
+    /** 基础激光：一截**断开**的长刃（弹体在上、束在下），全表只有它是分段的——长刃是这把枪唯一的读法。 */
+    public static final String[] SHOP_BEAM = {
+            "...000...",
+            "...040...",
+            "...040...",
+            "....0....",
+            "...040...",
+            "...040...",
+            "....0....",
+            "..04440..",
+            "...040...",
+    };
+
     /**
      * 按**玩法枚举的序号**索引的网格表：小怪读 {@code Balance.Enemy.STRAIGHT..BURSTER}、
      * Boss 读 {@code Balance.Boss.DESTROYER..FORTRESS}、掉落读 {@code Drops.CHIP..BOMB}。
@@ -488,7 +525,8 @@ public final class SpriteSheets {
     };
     /**
      * 商店卡图标：下标对齐 {@code Balance.ShopCard} 的 id 常量（FIREPOWER..RANDOM，再加簇 II 的
-     * MID_COURSE/IGNITION/HANDLING/DOGFIGHT）。五张一次性补给卡复用掉落图标（HP/盾/炸弹/能量/金币），
+     * MID_COURSE/IGNITION/HANDLING/DOGFIGHT，最后是两张武器解锁卡 MISSILE/BEAM）。五张一次性
+     * 补给卡复用掉落图标（HP/盾/炸弹/能量/金币），
      * 所以这里**不是**每个 id 一张新网格，而是同形状的第二次引用。
      *
      * <p>⚠ 这两条数组与卡表是**按下标**绑死的：加一张卡必须同时在这里尾上加一格，否则新卡会画成
@@ -499,12 +537,14 @@ public final class SpriteSheets {
             DROP_HP, DROP_SHIELD, DROP_BOMB, DROP_POWERUP, SHOP_MAGNET, DROP_COIN,
             SHOP_RANDOM,
             SHOP_MID, SHOP_IGN, SHOP_HAND, SHOP_DOG,
+            SHOP_MISSILE, SHOP_BEAM,
     };
     public static final int[] SHOP_ICON_IDS = {
             ID_SHOP_FIRE, ID_SHOP_RATE, ID_SHOP_CRIT, ID_SHOP_SPEED, ID_SHOP_HULL,
             ID_HP, ID_SHIELD, ID_BOMB, ID_POWERUP, ID_SHOP_MAGNET, ID_COIN,
             ID_SHOP_RANDOM,
             ID_SHOP_MID, ID_SHOP_IGN, ID_SHOP_HAND, ID_SHOP_DOG,
+            ID_SHOP_MISSILE, ID_SHOP_BEAM,
     };
 
     public static int widthOf(String[] rows) {

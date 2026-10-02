@@ -170,6 +170,32 @@ public final class HudLayout {
         out.set(W - BOMB_INSET - BOMB_W, bottom - BOMB_H, W - BOMB_INSET, bottom);
     }
 
+    // ---- 切枪键（同一条底线上、炸弹键的左手边）------------------------------------------------
+
+    /**
+     * 切枪键与炸弹键同宽同高，**同一排**摆在底部。
+     *
+     * <p>位置与"要不要做成一个键"都是他的逐字（2026-10-02）「切换在炸弹附近（总之是底部），
+     * 加个切换键」。判据也在那句话里：第二指既然常驻右下角（炸弹），换枪就落在同一指的横扫范围内，
+     * 不必再找第三个落点，也不必再加一个手势——双击已经给了超载，短按是走位。
+     *
+     * <p>净空 {@link #SWITCH_GAP} 给的是**绘制框之间**的距离，它不足以保证命中框不相交：两枚键都由
+     * {@code Widgets.hitRect} 各自按**中心**外扩到 48dp 下限，外扩量 {@code T} 是按屏幕密度算出来的，
+     * {@code T ≥ 42} 的低分辨率屏上两条命中框会在中间那 8 格咬上。所以 {@code Game.onPointerDown}
+     * 里切枪键**排在炸弹之前**——误判的方向选的是"把一颗炸弹点成换枪"而不是"把换枪点成炸掉一颗炸弹"，
+     * 前者只多一次震动，后者花掉一件存了整波的手牌。两枚键各自的中心永远落在自己的绘制框里，
+     * 认真按是不会走错的（{@code HudLayoutTest} 钉的就是两个绘制框不相交 + 中心互不落入对方框内）。
+     */
+    public static final int SWITCH_W = BOMB_W;
+    public static final int SWITCH_H = BOMB_H;
+    public static final int SWITCH_GAP = 8;
+
+    public static void switchRect(int battleHeight, RectI out) {
+        int bottom = battleHeight - BOMB_INSET;
+        int right = W - BOMB_INSET - BOMB_W - SWITCH_GAP;
+        out.set(right - SWITCH_W, bottom - SWITCH_H, right, bottom);
+    }
+
     public static void bossLabelRect(RectI out) {
         out.set(BOSS_LEFT, BOSS_LABEL_TOP, BOSS_RIGHT, BOSS_LABEL_BOTTOM);
     }
