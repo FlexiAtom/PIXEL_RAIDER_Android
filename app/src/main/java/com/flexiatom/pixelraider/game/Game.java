@@ -1021,11 +1021,11 @@ public final class Game implements GameThread.Host {
             // ⚠ 夹在 stepEnemies 与 stepChain 之间，两条都是硬的：它要读本步的**新**敌位
             // （否则引信与视场对着一帧前的敌人），又不能推进本步刚出膛的那一枚（链在它之后）。
             stepMissiles(wdt);
-            // 链必须在 playerFire 之前推进：布局的 C 是 `floor(周期/间隔 + 一格余量)` 取整来的，
+            // 链必须在 playerFire 之前推进：布局的一列容量 C 是 `floor(周期/间隔 + 一格余量)` 取整来的，
             // 于是排放窗口**最多可以比周期长出去一格的一小部分**（1e-4 个间隔，远小于一格弹链）。
             // 这一格恰好落在"下一代就绪"的同一步上——先推进链，最后那个时隙先出膛，随后
-            // beginGeneration 才重置游标；反过来写就会把整代里最靠后的 x 发弹**静默吃掉**
-            // （x = N/C，扳机叠满后不是小数）。
+            // beginGeneration 才重置游标；反过来写就会把整代里最靠后的那个时隙**静默吃掉**
+            // （横向优先之后它是一整排并列的列，最多 COLUMN_CAP 发，比旧律的单发重得多）。
             stepChain(wdt);
             playerFire();
             stepBullets(wdt);

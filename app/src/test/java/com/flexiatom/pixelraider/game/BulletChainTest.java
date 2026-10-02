@@ -33,8 +33,8 @@ import org.junit.Test;
  *
  * 算术大部分用**合成武器**跑：{@code Balance.Weapon} 的构造器是包内可见的，所以这里能造出
  * 干净的数，断言里不必夹一层浮点噪声，也不必把六把枪的真值抄进测试（抄表 = 第二个真源，
- * 表一改就红成假警报）。真表只在"扫全表""整步量化""撞车"这几条里出现，那里断的是**不变量**
- * 与**可达档上的具体 C**，不是随手挑的数。
+ * 表一改就红成假警报）。真表只在"扫全表""整步量化""基础档几发几列""列间距"这几条里出现，
+ * 那里断的是**不变量**与**可达档上的具体 C**，不是随手挑的数。
  *
  * 合成武器取 {@code 弹长 10 ÷ 弹速 100 = 0.1s = 6 个固定步}：间隔本身正好是整数步，所以
  * {@code interval} 这条量化路径在测试里是"原样通过"而不是"被修过"；周期取 0.55s ⇒
@@ -78,47 +78,102 @@ public class BulletChainTest {
 
     // ---- 排布闭合 -------------------------------------------------------------------------------
 
-    /** 有余数：前 y 个时隙各 x+1 发、其余 x 发，加起来必须正好 N（这是那条例数除法的全部内容）。 */
+    /** 有余数：前 base 个时隙满列、末尾剩 rem，加起来必须正好 N（这是那条例数除法的全部内容）。 */
     @Test
     public void layoutClosesOverTheRemainder() {
         BulletChain c = new BulletChain();
-        c.layout(synthetic(0), 17, PERIOD);                    // C=5，N=17 ⇒ x=3 y=2
-        assertEquals(SLOTS, c.slots());
-        assertEquals(4, c.columns());
+        c.layout(synthetic(0), 17, PERIOD);              // C=5，N=17 ⇒ want=8、need=4 ⇒ 8 列 3 档
+        assertEquals(SLOTS, c.periodSlots());
+        assertEquals(3, c.slots());
+        assertEquals(8, c.columns());
         int sum = 0;
         for (int k = 0; k < c.slots(); k++) sum += c.pelletsAt(k);
         assertEquals("逐时隙发数加起来必须等于 N，少一发就是静默丢弹", 17, sum);
-        assertEquals(4, c.pelletsAt(0));
-        assertEquals(4, c.pelletsAt(1));
-        assertEquals(3, c.pelletsAt(2));
-        assertEquals(3, c.pelletsAt(4));
+        assertEquals(8, c.pelletsAt(0));
+        assertEquals(8, c.pelletsAt(1));
+        assertEquals("最后一列不一定排满（用户逐字，L14614）", 1, c.pelletsAt(2));
         assertEquals(17, c.totalPellets());
     }
 
-    /** 整除：所有时隙都是 x 发，列数正好 x，不存在"半满的末列"。 */
+    /** 整除：所有时隙都是满列，不存在"半满的末列"。 */
     @Test
     public void layoutClosesExactlyWhenDivisible() {
         BulletChain c = new BulletChain();
-        c.layout(synthetic(1), 10, PERIOD);                    // C=5，N=10 ⇒ x=2 y=0
-        assertEquals(2, c.columns());
+        c.layout(synthetic(1), 16, PERIOD);              // C=5，N=16 ⇒ 8 列 × 2 档，rem=0
+        assertEquals(8, c.columns());
+        assertEquals(2, c.slots());
         for (int k = 0; k < c.slots(); k++) {
-            assertEquals("整除时每个时隙都该是 x 发", 2, c.pelletsAt(k));
+            assertEquals("整除时每个时隙都该是满列", 8, c.pelletsAt(k));
         }
     }
 
-    /** x 可以为 0（N < C，六把枪的**默认档**全是这种）：实现不许拿 x 当除数。 */
+    /**
+     * **N ≤ C 时不再收成一条竖链**——那正是 #55 的病灶，旧律在这里断的是 {@code columns == 1}。
+     *
+     * <p>横向优先之后 {@code N} 发就是 {@code N} 列、一个时隙打完：旧律的"先填满一列的 C 格
+     * 才开下一列"只在 {@code N > C} 时才长出第二列，而六把枪的基础 N 全都不超过自己的 C，
+     * 于是"每级加一"只是在同一条竖线上多加一发，屏幕上看不见分列（他报的现象）。
+     */
     @Test
-    public void fewerPelletsThanSlotsMakesASingleChain() {
+    public void fewerPelletsThanSlotsSpreadsHorizontally() {
         BulletChain c = new BulletChain();
-        c.layout(synthetic(3), 2, PERIOD);                     // C=5，N=2 ⇒ x=0 y=2 ⇒ 1 列
-        assertEquals(1, c.columns());
-        assertEquals(SLOTS, c.slots());
-        assertEquals(1, c.pelletsAt(0));
-        assertEquals(1, c.pelletsAt(1));
-        assertEquals(0, c.pelletsAt(2));
-        assertEquals(0, c.pelletsAt(4));
-        assertEquals("单列必须正对上方", 0f, c.columnAngle(0), 0f);
-        assertEquals("单列不该有横向偏移", 0f, c.columnOffset(0), 0f);
+        c.layout(synthetic(3), 2, PERIOD);               // C=5，N=2 ⇒ 2 列 1 档
+        assertEquals(2, c.columns());
+        assertEquals("整代一步打完（并行弹链，用户逐字 L14337「所有弹链是同时开火的」）",
+                1, c.slots());
+        assertEquals(2, c.pelletsAt(0));
+        assertEquals("两列必须横向分开", -10f, c.columnOffset(0), 1e-4f);
+        assertEquals(10f, c.columnOffset(1), 1e-4f);     // pitch = 2·size = 20，居中 ⇒ ±10
+        assertEquals("合成武器不吃张角 ⇒ 两列都正对上方", 0f, c.columnAngle(0), 0f);
+
+        BulletChain one = new BulletChain();
+        one.layout(synthetic(3), 1, PERIOD);             // N=1 才该是那条竖链
+        assertEquals(1, one.columns());
+        assertEquals(1, one.slots());
+        assertEquals("单列必须正对上方", 0f, one.columnAngle(0), 0f);
+        assertEquals("单列不该有横向偏移", 0f, one.columnOffset(0), 0f);
+    }
+
+    /**
+     * 每买一级"每级加一"就多一根并列的弹链——#55 想要的就是这个读数。
+     *
+     * <p>断的是**不变量**而不是抄表：基础档有几发就有几列，一路加到审美上限都是"一发一列"。
+     * 拿散射说，它一开口就该是一张 5 列的扇面，而不是"一条线连发五下"——旧律给出的正是后者，
+     * 因为那时列数要等 {@code N > C} 才长出来（基础 N 全不超过自己的 C）。
+     */
+    @Test
+    public void everyExtraPelletIsAColumnNotALongerLine() {
+        for (Balance.Weapon w : Balance.weapons) {
+            assertTrue("前提：基础发数得在审美上限之内", w.pellets <= BulletChain.COLUMN_CAP);
+            BulletChain c = new BulletChain();
+            c.layout(w, w.pellets, w.fireGap);
+            assertEquals(w.name + " 基础档有几发就该有几列", w.pellets, c.columns());
+            assertEquals(w.name + " 基础档该一步打完", 1, c.slots());
+            for (int n = 2; n <= BulletChain.COLUMN_CAP; n++) {
+                BulletChain g = new BulletChain();
+                g.layout(w, n, w.fireGap);
+                assertEquals(w.name + " 加一发该多一列（而不是多占一个时隙）", n, g.columns());
+                assertEquals(1, g.slots());
+            }
+        }
+    }
+
+    /**
+     * 相邻两列之间<b>空出一个弹宽</b>（#55 裁定「空 1 弹宽」）：中心距 = 2·size。
+     * 旧律的 1·size 是边缘相切、零空隙，两列读起来还是一条带——那是这个 bug 的另一半。
+     */
+    @Test
+    public void adjacentColumnsLeaveExactlyOneBulletWidthOfAir() {
+        for (Balance.Weapon w : Balance.weapons) {
+            BulletChain c = new BulletChain();
+            c.layout(w, w.pellets + 2, w.fireGap);
+            assertTrue("前提：这条得有多列才谈得上间距", c.columns() >= 2);
+            for (int j = 1; j < c.columns(); j++) {
+                float pitch = c.columnOffset(j) - c.columnOffset(j - 1);
+                assertEquals(w.name + " 列间距必须是 2 弹宽", w.size * 2f, pitch, 1e-4f);
+                assertTrue(w.name + " 两列之间没有留空", pitch - w.size > 0f);
+            }
+        }
     }
 
     /** N ≤ 0 是调用方的错误，但链不该因此少发或炸掉：按 1 发处理。 */
@@ -134,7 +189,14 @@ public class BulletChainTest {
 
     // ---- 时隙与周期的关系 -----------------------------------------------------------------------
 
-    /** 一代的排放窗口必须落在周期之内（否则两代叠在一起），又不能浪费掉一整格。 */
+    /**
+     * 一代的排放窗口必须落在周期之内（否则两代叠在一起）。
+     *
+     * <p>旧律在这里还断第二句"不能浪费掉一整格"——因为那时窗口 {@code = C·interval} 恒等于
+     * 整个周期预算。横向优先之后 {@code used} 是**主动缩小的**（N 发一列一发，用完 N 个时隙里
+     * 需要的那几个），窗口当然短于周期，那条判据随之失去意义。它真正的内容搬到了
+     * {@link #periodSlots()} 上：**C 本身**仍然不许白留一格，见下面对 C 的那句断言。
+     */
     @Test
     public void generationWindowFitsThePeriodWithoutWastingASlot() {
         float[] periods = {0.1f, 0.14f, 0.26f, 0.55f, 1f};
@@ -145,13 +207,20 @@ public class BulletChainTest {
             float window = c.slots() * c.slotInterval();
             assertTrue("排放窗口 " + window + " 超出周期一步：那一格会撞上下一代的触发步",
                     window <= period + Time.STEP);
-            assertTrue("周期还装得下一个时隙却没排：C 算小了", window + c.slotInterval() > period - EPS);
+            assertTrue("周期还装得下一个时隙却没算进 C：C 算小了",
+                    c.periodSlots() * c.slotInterval() + c.slotInterval() > period - EPS);
+            assertTrue("实际占用的时隙数越过一列容量 ⇒ 窗口跨周期、末尾会被下一代游标吃掉",
+                    c.slots() <= c.periodSlots());
         }
     }
 
     /**
-     * 亚步长的间隔取整到**一步**（向上取整的下界），于是排放节奏是"每一步一个时隙"——
-     * 一步之内绝不连发两发，因为那两发出膛点与速度都相同，会永久重叠成一条弹。
+     * 亚步长的间隔取整到**一步**（向上取整的下界）——比一步还短的时间表达不出来。
+     *
+     * <p>旧律由此推出"一步之内绝不连发两发"，因为那两发出膛点与速度都相同、会永久重叠成一条弹。
+     * 横向优先之后这个前提变了：同一步出的多发**出膛点不同**（一列一发），所以连发是允许的、
+     * 也正是"所有弹链同时开火"（用户逐字 L14337）。这条现在断的是它真正要防的东西：
+     * **同一步出的多发两两横向分得开**，不许落在同一个点上叠成一条。
      */
     @Test
     public void subStepIntervalBecomesExactlyOneStepPerSlot() {
@@ -160,11 +229,21 @@ public class BulletChainTest {
         assertTrue("前提不成立：这条测的必须是亚步长的武器", fast.size / fast.bulletSpeed < Time.STEP);
         c.layout(fast, 4, 0.5f);
         assertEquals(Time.STEP, c.slotInterval(), 0f);
+        assertEquals("4 发 ⇒ 4 列一步打完", 4, c.columns());
+        assertEquals(1, c.slots());
         BulletPool pool = new BulletPool(64);
         c.beginGeneration(template(Balance.weapons[Balance.Weapon.PULSE]));
+        int made = 0;
         for (int step = 0; step < 20 && c.remaining() > 0; step++) {
-            int made = c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null);
-            assertTrue("第 " + step + " 步连发了 " + made + " 发：同点出膛 = 永久重叠", made <= 1);
+            made += c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null);
+        }
+        assertEquals(4, made);
+        for (int i = 0; i < pool.activeCount(); i++) {
+            for (int j = i + 1; j < pool.activeCount(); j++) {
+                Bullet a = pool.activeAt(i), b = pool.activeAt(j);
+                assertTrue("同一步出的两发挤在同一个 x ⇒ 永久重叠成一条弹",
+                        Math.abs(a.x - b.x) >= fast.size - 1e-4f);
+            }
         }
     }
 
@@ -211,7 +290,8 @@ public class BulletChainTest {
     /**
      * 周期正好是间隔的整数倍时**不许掉一格**。float 除法真会把它压到整数下方：
      * 脉冲 @1.2× 射速（成长树满档）⇒ 周期 0.14f/1.2f = 7 步，而 {@code period/interval} 算出来是
-     * 6.999999 ⇒ 裸 floor 得 6，一代白白少排一个时隙。
+     * 6.999999 ⇒ 裸 floor 得 6。旧律直接少排一个时隙（丢 {@code N/C} 发）；横向优先之后这一格
+     * 改掉的是**一列容量**，也就是"时间预算逼出几列"那条上界——照样是错账，只是错得晚一格。
      */
     @Test
     public void anExactMultipleKeepsItsSlot() {
@@ -221,7 +301,7 @@ public class BulletChainTest {
         c.layout(pulse, 1, period);
         assertEquals("前提：这条测的必须是周期与间隔成整数倍的档",
                 7f, period / c.slotInterval(), 1e-4f);
-        assertEquals("整除的周期不许被浮点舍入吃掉一格", 7, c.slots());
+        assertEquals("整除的周期不许被浮点舍入吃掉一格", 7, c.periodSlots());
         // 反方向的陷阱：物理间隔正好是两步时，ceil 也不许多跳一步
         BulletChain two = new BulletChain();
         Balance.Weapon exact = weapon(22, 300f, 10f, 0.19f);     // 10/300 = 1/30 s = 恰好两步
@@ -249,26 +329,62 @@ public class BulletChainTest {
     }
 
     /**
-     * 射速乘子把周期压短 ⇒ C 必须跟着变小、列数跟着变多。
+     * 射速乘子把周期压短 ⇒ 一列容量 C 必须跟着变小、列数跟着变多。
      *
      * <p>这条是"用**有效**周期而不是基础 fireGap 布局"的理由本身：拿基础周期的布局排完要
-     * {@code C·interval} = 0.5s，而狂热之后实际周期只有 0.34s ⇒ 上一代还没排完下一代就开了，
-     * 两代的弹在同一条线上叠起来——正是弹链要修掉的那个毛病。
+     * {@code used·interval} = 0.5s，而狂热之后实际周期只有 0.34s ⇒ 上一代还没排完下一代就开了，
+     * 末尾那个时隙被 {@code beginGeneration} 的游标重置吃掉——两代的弹在同一条线上叠起来，
+     * 正是弹链要修掉的那个毛病。
+     *
+     * <p>N 取 40 而不是旧律下的 17，是因为横向优先之后 17 发（3 档）在快档里也塞得进周期，
+     * 这条就退化成"没有可跨的东西"。40 发在 C=5 时占满 5 档、在 C=3 时必须把列数顶到
+     * 时间预算要求的 14 列（{@code > COLUMN_CAP}）——顺带钉住"两条上界不是重复"：
+     * 审美上限让位给"不许丢发"，不是反过来。
      */
     @Test
     public void fasterFireRateNarrowsTheChainIntoMoreColumns() {
         BulletChain base = new BulletChain();
-        base.layout(synthetic(32), 17, PERIOD);
+        base.layout(synthetic(32), 40, PERIOD);
         float fastPeriod = PERIOD / 1.62f;
         BulletChain fast = new BulletChain();
-        fast.layout(synthetic(32), 17, fastPeriod);
-        assertTrue("乘子变大 C 必须变小", fast.slots() < base.slots());
+        fast.layout(synthetic(32), 40, fastPeriod);
+        assertEquals("前提：慢档停在审美上限，快档必须越过它", 5, base.periodSlots());
+        assertEquals(3, fast.periodSlots());
+        assertTrue("乘子变大 C 必须变小", fast.periodSlots() < base.periodSlots());
+        assertEquals("时间预算逼出的列数（ceil(40/3)=14）盖过审美上限",
+                BulletChain.COLUMN_CAP + 6, fast.columns());
         assertTrue("C 变小 ⇒ 同 N 下列数变多", fast.columns() > base.columns());
         assertTrue("拿基础周期的布局会跨过实际周期（这就是不能用基础周期的证据）",
                 base.slots() * base.slotInterval() > fastPeriod);
+        assertTrue("按实际周期布局之后窗口必须落在周期里",
+                fast.slots() * fast.slotInterval() <= fastPeriod + EPS);
         int sum = 0;
         for (int k = 0; k < fast.slots(); k++) sum += fast.pelletsAt(k);
-        assertEquals("变密之后仍然一发不丢", 17, sum);
+        assertEquals("变密之后仍然一发不丢", 40, sum);
+    }
+
+    /**
+     * 周期短到只剩一格时**全靠横向铺开**，一列一发、一步打完，而不是"宁可重叠不可丢发"。
+     *
+     * <p>这是 {@code need} 那条上界的纯函数缝：旧律在这种档里把 N 发全塞进同一个时隙的同一列
+     * （{@code pelletsAt[0] = N}），屏幕上是 N 发重叠成一发；新律把它摊成 N 列，重叠无从发生。
+     */
+    @Test
+    public void aOneSlotPeriodSpreadsEveryPelletOntoItsOwnColumn() {
+        BulletChain c = new BulletChain();
+        Balance.Weapon w = synthetic(33);
+        c.layout(w, 10, 0.05f);                      // interval 0.1 > 周期 0.05 ⇒ C 被钳到 1
+        assertEquals("前提：一列容量只剩一格", 1, c.periodSlots());
+        assertEquals("时间预算逼出 10 列，越过了审美上限", 10, c.columns());
+        assertEquals("10 列一列一发 ⇒ 整代仍然一步打完，没有丢发也没有叠发", 1, c.slots());
+        assertEquals(10, c.pelletsAt(0));
+        BulletPool pool = new BulletPool(32);
+        c.beginGeneration(template(Balance.weapons[Balance.Weapon.PULSE]));
+        assertEquals(10, drain(c, pool));
+        for (int i = 1; i < pool.activeCount(); i++) {
+            assertTrue("相邻两列之间必须空得出弹宽",
+                    pool.activeAt(i).x - pool.activeAt(i - 1).x >= w.size - 1e-4f);
+        }
     }
 
     // ---- 排放 -------------------------------------------------------------------------------
@@ -301,28 +417,48 @@ public class BulletChainTest {
     @Test
     public void clearAbortsTheRestOfTheGenerationOnly() {
         BulletChain c = new BulletChain();
-        c.layout(synthetic(35), 5, PERIOD);
+        c.layout(synthetic(35), 17, PERIOD);         // 8 列 × 3 档 ⇒ 头一档 8 发，后面还有两档
         c.beginGeneration(template(Balance.weapons[Balance.Weapon.PULSE]));
-        BulletPool pool = new BulletPool(16);
-        assertEquals(1, emitOne(c, pool, NOSE_X));
+        BulletPool pool = new BulletPool(32);
+        assertEquals("一个时隙发的是一整排并列的列", 8, emitOne(c, pool, NOSE_X));
+        assertTrue("前提：这一代还没排完", c.remaining() > 0);
         c.clear();
         assertEquals(0, c.remaining());
         assertEquals("清完就该一帧都不发", 0, c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null));
-        assertEquals(1, pool.activeCount());
+        assertEquals(8, pool.activeCount());
     }
 
-    /** 出膛点每帧重读机头 ⇒ 边移动边开火，链是弯的（"链会弯"那条卖点的唯一实现处）。 */
+    /**
+     * 出膛点每帧重读机头 ⇒ 跨时隙的链是弯的（"链会弯"那条卖点的唯一实现处）。
+     *
+     * <p>横向优先之后**基础档一步打完**，一步之内看不出弯——所以这里必须喂一个需要多档的 N
+     * （17 发 ⇒ 8 列 × 3 档）：同一个时隙内每一列都落在"那一帧的机头 + 本列偏移"上，
+     * 不同时隙之间则整体跟着机头走。偏移本身在两档之间不变 ⇒ 弯曲的来源只有机头。
+     */
     @Test
     public void chainBendsWithTheNose() {
         BulletChain c = new BulletChain();
-        c.layout(synthetic(36), 3, PERIOD);                     // N=3 < C=5 ⇒ 1 列，每时隙 1 发
+        c.layout(synthetic(36), 17, PERIOD);                     // 8 列 × 3 档，末档 1 发
         c.beginGeneration(template(Balance.weapons[Balance.Weapon.PULSE]));
-        BulletPool pool = new BulletPool(16);
-        for (int i = 0; i < 3; i++) {
-            float nose = 100f + i * 7f;
-            assertEquals(1, emitOne(c, pool, nose));
-            assertEquals("第 " + i + " 发出膛时的机头位置", nose, pool.activeAt(i).x, EPS);
+        BulletPool pool = new BulletPool(32);
+        float[] noses = {100f, 120f, 90f};
+        int seen = 0;
+        for (int slot = 0; slot < c.slots(); slot++) {
+            // 上限取 20 而不是正好六个固定步：{@code acc} 是浮点连加，与 {@code iv = steps×STEP}
+            // 那次乘法可能差几个 ulp，到点因此可能晚一步。多喂的几步用的还是同一个
+            // noses[slot] ⇒ 出膛点不变，断言不受影响。
+            for (int f = 0; f < 20 && pool.activeCount() == seen; f++) {
+                c.step(Time.STEP, noses[slot], NOSE_Y, pool, null);
+            }
+            int made = pool.activeCount() - seen;
+            assertTrue("第 " + slot + " 档没发出来", made > 0);
+            for (int j = 0; j < made; j++) {
+                assertEquals("第 " + slot + " 档第 " + j + " 列的出膛点 = 当帧机头 + 列偏移",
+                        noses[slot] + c.columnOffset(j), pool.activeAt(seen + j).x, EPS);
+            }
+            seen += made;
         }
+        assertEquals(17, seen);
     }
 
     /** 一代内部只 roll 一次暴击：整代的 crit 标志与伤害必须完全相同。 */
@@ -368,22 +504,22 @@ public class BulletChainTest {
     public void columnsAreSymmetricAboutTheAimLine() {
         BulletChain c = new BulletChain();
         Balance.Weapon w = synthetic(40);
-        // 弹宽改成 4 是为了让"列间距 = 1 弹宽"可测；同时把绘制长度比例补回去，
+        // 弹宽改成 4 是为了让"列间距 = 2 弹宽"可测；同时把绘制长度比例补回去，
         // 绘制弹长仍是 10 ⇒ 间隔仍是六个固定步 ⇒ C 仍是 5。这两个字段分开之后才看得出
         // 链的几何吃的是 size、节奏吃的是 size×ratio。
         w.size = 4f;
         w.drawLenRatioY = 2.5f;
         w.spreadDeg = 44f;
-        c.layout(w, 17, PERIOD);                                 // C=5 ⇒ 4 列
+        c.layout(w, 17, PERIOD);                                 // C=5 ⇒ 8 列（want=8 盖过 need=4）
         assertEquals("改弹宽不该改节奏（绘制弹长没变）", IV, c.slotInterval(), 1e-6f);
-        assertEquals(4, c.columns());
+        assertEquals(8, c.columns());
         float sumOffset = 0f;
         float sumAngle = 0f;
         for (int j = 0; j < c.columns(); j++) {
             sumOffset += c.columnOffset(j);
             sumAngle += c.columnAngle(j);
-            assertEquals("列间距必须是 1 弹宽",
-                    j * w.size - (c.columns() - 1) / 2f * w.size, c.columnOffset(j), 1e-4f);
+            assertEquals("列间距必须是 2 弹宽（中间空 1 弹宽）",
+                    j * 2f * w.size - (c.columns() - 1) / 2f * 2f * w.size, c.columnOffset(j), 1e-4f);
         }
         assertEquals("整组必须居中于瞄准线", 0f, sumOffset, 1e-4f);
         assertEquals("张角必须左右对称", 0f, sumAngle, 1e-3f);
@@ -420,12 +556,35 @@ public class BulletChainTest {
     public void tooManyColumnsFailsLoudlyInsteadOfLosingPellets() {
         BulletChain c = new BulletChain();
         c.layout(synthetic(42), 1, PERIOD);
-        assertTrue("先确认 C=5 的前提", c.slots() == SLOTS);
+        assertTrue("先确认 C=5 的前提", c.periodSlots() == SLOTS);
         try {
-            c.layout(synthetic(42), 85, PERIOD);             // C=5 ⇒ N=85 要 17 列 > MAX_COLUMNS
+            c.layout(synthetic(42), 85, PERIOD);             // C=5 ⇒ 85 发要 17 列 > MAX_COLUMNS
             fail("列数越界必须抛：先前 WeaponFire 的 16 槽硬顶就是在这里静默吞掉了玩家那一下");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("MAX_COLUMNS"));
+        }
+    }
+
+    /**
+     * 列数撞到数组硬顶之后还剩多少发数空间：**超过就抛，不钳**。
+     *
+     * <p>横向优先之后"列数越界"与"窗口跨周期"是同一件事的两种写法——列已经开到硬顶 16 了，
+     * 剩下的发数只能往时间上叠，而时间预算（{@code C}）也不够 ⇒ 唯一的诚实出路是炸。
+     * 这条钉的就是那条 {@code used > C} 分支（消息里带上 MAX_COLUMNS，是为了让"为什么不能再开列"
+     * 在异常里可读，而不是让人以为数组还能再扩）。
+     */
+    @Test
+    public void aGenerationThatFitsNeitherDimensionFailsLoudly() {
+        BulletChain c = new BulletChain();
+        Balance.Weapon w = synthetic(43);
+        c.layout(w, 16, 0.05f);                      // C=1 ⇒ need=16 ⇒ 正好顶满硬顶还能排（used=1）
+        assertEquals("前提：一格周期 + 数组硬顶的临界档", 16, c.columns());
+        assertEquals(1, c.slots());
+        try {
+            c.layout(w, 17, 0.05f);                  // 17 发 ⇒ used=2 > C=1 ⇒ 装不下
+            fail("横纵向都到顶还必须抛：静默截断就是把丢发藏进几何里");
+        } catch (IllegalStateException expected) {
+            assertTrue(expected.getMessage(), expected.getMessage().contains("period capacity 1"));
         }
     }
 
@@ -465,7 +624,8 @@ public class BulletChainTest {
     public void everyWeaponLaysOutAcrossEveryFireRateTier() {
         float[] muls = {0.6075f, 0.75f, 0.9f, 1f, 1.2f, 1.35f, 1.62f, 1.944f};
         int pelletBonus = Balance.shop.pelletPerLevel * MissilesTest.TRIGGER_LEVEL_AT_INCOME_CAP;
-        int worstSlots = 0;
+        int worstPeriodSlots = 0;
+        int worstUsed = 0;
         int worstColumns = 0;
         for (Balance.Weapon w : Balance.weapons) {
             for (float mul : muls) {
@@ -473,13 +633,17 @@ public class BulletChainTest {
                 for (int n : new int[]{Math.max(1, w.pellets), pelletBonus + Math.max(1, w.pellets)}) {
                     BulletChain c = new BulletChain();
                     c.layout(w, n, period);
-                    worstSlots = Math.max(worstSlots, c.slots());
+                    worstPeriodSlots = Math.max(worstPeriodSlots, c.periodSlots());
+                    worstUsed = Math.max(worstUsed, c.slots());
                     worstColumns = Math.max(worstColumns, c.columns());
                     float window = c.slots() * c.slotInterval();
                     // 窗口可以因取整的那一格余量略微超出周期，但**绝不能超出一个时隙**：
                     // 超出一格就意味着撞车时可能有两个时隙还没发，那才是真丢发（见 BulletChain 类注释）。
                     assertTrue(w.name + " 乘子 " + mul + " 的排放窗口超出了一整个时隙",
                             window - period < c.slotInterval());
+                    // 横向优先的直接推论：实际占用的时隙数不许超过一列容量（否则窗口跨周期）。
+                    assertTrue(w.name + " 乘子 " + mul + " 的 used 越过了 C",
+                            c.slots() <= c.periodSlots());
                     assertTrue(w.name + " 的间隔低于一步", c.slotInterval() >= Time.STEP);
                     assertEquals(w.name + " 乘子 " + mul + " 的间隔不是整数步",
                             Math.round(c.slotInterval() / Time.STEP),
@@ -490,32 +654,38 @@ public class BulletChainTest {
                 }
             }
         }
-        assertTrue("极限档跑出 " + worstSlots + " 个时隙，已经贴到 MAX_SLOTS=" + BulletChain.MAX_SLOTS,
-                worstSlots < BulletChain.MAX_SLOTS);
+        assertTrue("极限档跑出一列容量 " + worstPeriodSlots + "，已经贴到 MAX_SLOTS=" + BulletChain.MAX_SLOTS,
+                worstPeriodSlots < BulletChain.MAX_SLOTS);
+        assertTrue("极限档跑出 " + worstUsed + " 个实际时隙，已经贴到 MAX_SLOTS=" + BulletChain.MAX_SLOTS,
+                worstUsed < BulletChain.MAX_SLOTS);
         assertTrue("极限档跑出 " + worstColumns + " 列，已经贴到 MAX_COLUMNS=" + BulletChain.MAX_COLUMNS,
                 worstColumns < BulletChain.MAX_COLUMNS);
     }
 
     /**
-     * 撞车：周期恰好等于 {@code C} 个间隔（真表达档 = 脉冲 @成长树 1.2× 射速）时，最后一个时隙
-     * 与"下一代就绪"落在同一步上。{@code Game.step} 把 {@code stepChain} 排在 {@code playerFire}
-     * **之前**就是为了这一步——先推进链、再 {@code beginGeneration}，末尾那一档才不会被游标重置吃掉。
+     * 撞车：排放窗口恰好顶满周期时，最后一个时隙与"下一代就绪"落在同一步上。
+     * {@code Game.step} 把 {@code stepChain} 排在 {@code playerFire} **之前**就是为了这一步——
+     * 先推进链、再 {@code beginGeneration}，末尾那一档才不会被游标重置吃掉。
      *
-     * <p>这条自己搭一个与 {@code Game.step} 同序的循环，断的是"每一代都发满 N 发"。
-     * 谁把那两个调用的顺序换回来，这里就会少 {@code N/C} 发（此档 = 3），而它不会有任何报错。
+     * <p>真表达档是"脉冲 @成长树 1.2× 射速"（周期恰好 7 步），但横向优先之后那一档的
+     * {@code used=4 < C=7}，窗口不再顶满 ⇒ 撞不上。这里改用合成档：一个时隙正好一步
+     * （{@code 10/600 = 1/60}），周期取五步，N=40 ⇒ 8 列 × 5 档 = 窗口正好等于周期，末档与
+     * 下一代同步。谁把那两个调用的顺序换回来，这里每代就会少发一整排（8 发），而它不会有任何报错。
      */
     @Test
     public void theLastSlotSurvivesAVolleyThatBeginsOnTheSameStep() {
-        Balance.Weapon pulse = Balance.weapons[Balance.Weapon.PULSE];
-        float period = pulse.fireGap / 1.2f;                 // 恰好 7 个固定步
-        int n = 26;                                          // 扳机叠满后的收入上界：每档都有 3~4 发
+        float period = 5 * Time.STEP;                        // 恰好 5 个时隙 ⇒ 窗口顶满
+        int n = 40;
         BulletChain c = new BulletChain();
-        c.layout(pulse, n, period);
-        assertEquals("前提：这一档的 C 必须正好把窗口顶满周期", 7, c.slots());
-        assertEquals("前提：末时隙必须非空，否则撞车撞不到发", n / c.slots(), c.pelletsAt(c.slots() - 1));
+        c.layout(weapon(45, 600f, 10f, period), n, period);
+        assertEquals("前提：这条测的必须是「一步一个时隙」的档（多了浮点漂移就没法数步）",
+                Time.STEP, c.slotInterval(), 0f);
+        assertEquals("前提：这一档的 C 必须正好把窗口顶满周期", 5, c.periodSlots());
+        assertEquals("前提：末时隙必须真的存在，否则撞车撞不到发", c.periodSlots(), c.slots());
+        assertTrue("前提：末时隙非空", c.pelletsAt(c.slots() - 1) > 0);
 
-        WeaponFire.Template t = template(pulse);
-        BulletPool pool = new BulletPool(64);
+        WeaponFire.Template t = template(Balance.weapons[Balance.Weapon.PULSE]);
+        BulletPool pool = new BulletPool(128);
         c.beginGeneration(t);
         float timer = period;
         int volleys = 0;
@@ -544,16 +714,20 @@ public class BulletChainTest {
      * UTC 09-25T07:19:15 ＝本地 09-25 15:19：「所有弹链是同时开火的，不存在这些问题，具体设计同上」）；
      * "并行弹链"这个说法与按 x 分组的判据是我的。
      *
-     * <p>**制导武器不在这条里**（step 4 接线后实跑一次，导弹 N=2 报"间距 0.0"，于是看清了
-     * 这条判据的适用条件）：弹链的间距**由飞行拉开**——出膛点都在机头，两发的距离差完全等于
-     * "前一双多飞了 {@code interval} 那么久"。匀速弹（五把）成立，因为 {@code interval·
-     * bulletSpeed ≥ len} 就是这条的几何式，永远成立；导弹会推力与滑行减速，速度**不再是**
-     * {@code bulletSpeed}，滑行段的速度只剩 120~133px/s 时间距掉到 4.0~4.4px，而它的绘制长度
-     * 按导弹自己那条口径是 4px 的方块（{@code Game.drawMissiles} 不乘 {@code drawLenRatioY}），
-     * 不是 6.8px。⇒ 这条对导弹**证伪的不是链，是我拿错了长度**，硬跑只会逼出两种假话：要么在
-     * 测试里手写一遍匀速积分（用导弹不用的模型证明链的公式），要么让它红。链的几何式对六把枪
-     * 一律成立，那条由 {@link #quantizationAlwaysRoundsUpToAWholeStep} 全表覆盖；制导弹**落在
-     * 哪张池**由 {@link EntitiesTest#everyWeaponMakesAtLeastOneBullet} 钉。
+     * <p>横向优先之后这条的**适用面变窄了**：只有 {@code used > 1}（{@code N > COLUMN_CAP}，或
+     * 快档被时间预算顶出更多列）时同一列才会有第二发，{@code n ≤ 8} 这一圈全是"一列一发"，
+     * 同列配对为空 ⇒ 断言空转。它的横向半边由
+     * {@link #adjacentColumnsLeaveExactlyOneBulletWidthOfAir} 与
+     * {@link #subStepIntervalBecomesExactlyOneStepPerSlot} 接手，这里继续守纵向那一半。
+     *
+     * <p>**制导武器不在这条里**：弹链的间距**由飞行拉开**——出膛点都在机头，两发的距离差完全等于
+     * "前一双多飞了 {@code interval} 那么久"。匀速弹成立，因为 {@code interval·bulletSpeed ≥ len}
+     * 就是这条的几何式（{@link #quantizationAlwaysRoundsUpToAWholeStep} 全表覆盖）；导弹会推力与
+     * 滑行减速，速度**不再是** {@code bulletSpeed}，滑行段的速度只剩 120~133px/s 时间距掉到
+     * 4.0~4.4px，而它的绘制长度按导弹自己那条口径是 4px 的方块（{@code Game.drawMissiles} 不乘
+     * {@code drawLenRatioY}），不是 6.8px。⇒ 这条对导弹**证伪的不是链，是我拿错了长度**，硬跑只会
+     * 逼出两种假话：要么在测试里手写一遍匀速积分（用导弹不用的模型证明链的公式），要么让它红。
+     * 制导弹**落在哪张池**由 {@link EntitiesTest#everyWeaponMakesAtLeastOneBullet} 钉。
      */
     @Test
     public void everyWeaponSpacesItsChainByAtLeastOneBulletLength() {

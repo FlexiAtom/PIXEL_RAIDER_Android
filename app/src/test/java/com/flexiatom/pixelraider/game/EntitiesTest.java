@@ -430,11 +430,13 @@ public class EntitiesTest {
     }
 
     /**
-     * 一代弹丸是一条**沿瞄准线排开的链**：相邻两发首尾相切（间距 = 绘制弹长），全部正上方飞。
+     * 一代弹丸是**一张摊开的扇面**，不是叠在机头身上的一坨。
      *
-     * <p>取代先前的"散射扇形对称张开"——那 5 发同角重叠的弹在屏幕上是一条线、DPS 却按 5 放大，
-     * 弹链把"多发"改放到**时间**轴上（提案 bullet-chain-geometry）。张角现在只在**多列**时出现，
-     * 归 {@code BulletChainTest} 管；这里钉的是"一列时必须严格成一条竖链"。
+     * <p>取代先前的"散射 5 发同角重叠成一条竖线、DPS 却按 5 放大"（提案 bullet-chain-geometry）。
+     * 那条改造把"多发"改放到**时间**轴上，代价是基础档 {@code N ≤ C} 时恒为一列 ⇒ 屏幕上还是
+     * 一条线，正是 #55 报的现象。横向优先之后 5 发就是 5 列一步打完：横向分得开、纵向同高、
+     * 张角左右对称。列与列的间距公式归 {@code BulletChainTest} 管，这里钉的是**过了池与出膛**
+     * 之后画面上的读数（{@code vx/vy} 是 {@link WeaponFire#fireOne} 按列角算完再写进池的那两个数）。
      */
     @Test
     public void aGenerationIsAChainNotAPile() {
@@ -447,24 +449,39 @@ public class EntitiesTest {
         assertEquals(5, made);
         assertEquals(5, pool.activeCount());
         float len = shot.size * shot.drawLenRatioY;
+        float sumVx = 0f;
         for (int i = 0; i < 5; i++) {
             Bullet b = pool.activeAt(i);
             assertEquals(shot.bulletSpeed, (float) Math.hypot(b.vx, b.vy), 1e-2f);
             assertTrue("弹丸没有向上飞", b.vy < 0f);
-            assertEquals("单列一代不该有任何横向分量", 0f, b.vx, 1e-3f);
             assertEquals(shot.size, b.size, 0f);
             assertEquals(shot.color, b.color);
+            sumVx += b.vx;
         }
+        assertEquals("五列的张角必须左右对称", 0f, sumVx, 1e-3f);
+        assertTrue("中间那一列不许偏", Math.abs(pool.activeAt(2).vx) < 1e-3f);
         // activeAt 的下标顺序 = 出膛顺序（free-list 从 0 往上取，且这一代没有任何一发出界），
-        // 所以第 i 发比第 i−1 发晚恰好一个时隙。间距的下界是弹长（相切），上界再多一帧行程
-        // （时隙只能落在帧边界上，量不出来更细的分度）。
+        // 五发同属一个时隙 ⇒ 纵向必须并排在同一高度上（差值只剩各自斜飞一帧的行程）。
         for (int i = 1; i < 5; i++) {
-            float gap = pool.activeAt(i).y - pool.activeAt(i - 1).y;
-            assertTrue("第 " + i + " 发压在了前一发身上：弹链退化成了同一点", gap >= len - 1e-3f);
-            assertTrue("第 " + i + " 发与前一发之间断开了超过一帧行程",
-                    gap <= len + DT * shot.bulletSpeed + 1e-3f);
+            Bullet a = pool.activeAt(i - 1), b = pool.activeAt(i);
+            assertTrue("第 " + i + " 列压在前一列身上：横向没分开（Δx="
+                            + (b.x - a.x) + "，弹宽 " + shot.size + "）",
+                    b.x - a.x >= shot.size - 1e-3f);
+            assertTrue("同一时隙的五发该并排在同一高度（Δy=" + (a.y - b.y) + "）",
+                    Math.abs(a.y - b.y) <= len);
         }
-        assertTrue("链应该往屏幕上方排", pool.activeAt(4).y < 300f);
+        assertTrue("扇面应该往屏幕上方飞", pool.activeAt(0).y < 300f);
+
+        // 纵向那一半：同一列的相邻两发（第二个时隙回填第 0 列）之间必须拉开一个绘制弹长。
+        // 量的是**沿弹道方向**的两点距离而不是 Δy——斜着飞的列，Δy 会被 cos 削短，
+        // 而两发同速同向，它们的真实间隔恒等于 interval·speed。
+        pool.clear();
+        made = fireGeneration(chain, pool, null, shot, 9, shot.fireGap, tpl, 1f, 1f, 0, 0.9f, 0);
+        assertEquals(9, made);
+        Bullet first = pool.activeAt(0), second = pool.activeAt(8);
+        float along = (float) Math.hypot(first.x - second.x, first.y - second.y);
+        assertTrue("同列两发叠在一起了（沿弹道间距 " + along + " < 弹长 " + len + "）",
+                along >= len - 1e-3f);
     }
 
     @Test

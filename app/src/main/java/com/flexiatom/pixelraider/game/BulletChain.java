@@ -28,22 +28,38 @@ import com.flexiatom.pixelraider.core.Time;
  * 是沿线的 N 次独立命中，DPS 按 N 放大而屏幕上只有一条线（可读性错觉 + 一次吃掉 N 格池）。
  * 弹链把"多发"同时表达在**空间**（列）与**时间**（时隙）上：出膛点跟随机头，链因此会弯。
  *
- * 排布是「x 列整余 y 弹」那条例数除法。**归属分两半，别糊在一起**：引用那六个字是用户第一手逐字
- * （transcript L14614，2026-09-25T08:41:39.956Z，`toolUseResult.feedback`/`status=rejected`，
- * 同句还有「多列子弹同时射击，并且最后一列不一定排满」），而**下面这个块里的全部词汇与符号是我的**
+ * 排布是**横向优先**的整除分配。**归属分两半，别糊在一起**：「多列子弹同时射击，并且最后一列
+ * 不一定排满」那十四个字是用户第一手逐字（transcript L14614，2026-09-25T08:41:39.956Z，
+ * `toolUseResult.feedback`/`status=rejected`），而**下面这个块里的全部词汇与符号是我的**
  * （时隙 / 周期 / 整除 / 弹速 / 绘制 / 列数 / 恒等 / 相切——这八个词在本会话的<b>五条</b>第一手通道
  * （plain / queued_command / feedback / answers-FREE / answers-OPT）里各 0 命中；2026-09-27 现跑，
  * 全库仅「绘制」有 1 次命中，在另一个会话 2026-09-22T08:02:00.688Z，内容是让我"绘制修改结果"，与弹链无关）。
- * 尤其**闭合那一行是我推的**：他同一条记录里举的算例写着「后7-y=7-3=5次」，7−3 真值是 4 ⇒
- * 这条恒等式是给那个笔误兜底，不是他给的判据。
+ * 闭合那一行（{@code base·columns + rem = N}）也是我推的，不是他给的判据——他同一条记录里举的算例
+ * 写着「后7-y=7-3=5次」，7−3 真值是 4 ⇒ 那条算例本身有笔误。
  * <pre>
- * interval = 走完一个绘制弹长所需的时间，**向上取整到整数个固定步**  ← 见下
- * slots C  = max(1, floor(周期 / interval))   ← 一列装得下几发（同列相邻两发首尾相切不重叠）
- * x = N / C,  y = N % C                       ← 只有"整除"与"有余"两种情况
- * columns    = x + (y > 0 ? 1 : 0)            ← 前 x 列各 C 发，末列 y 发
- * 第 k 时隙发数 = x + (y > 0 &amp;&amp; k &lt; y ? 1 : 0)
- * 闭合：y(x+1) + (C−y)x = Cx + y = N          ← 发数永不丢，这条由测试钉住
+ * interval    = 走完一个绘制弹长所需的时间，**向上取整到整数个固定步**  ← 见下
+ * 一列容量 C   = max(1, floor(周期 / interval))   ← 同列相邻两发首尾相切不重叠
+ * columns     = min(MAX_COLUMNS, max( min(N, COLUMN_CAP), ceil(N / C) ))
+ *               ↑审美上限      ↑时间预算逼出来的最少列数（见下"两条上界"）
+ * used        = ceil(N / columns)                 ← 本代真正占用的时隙数
+ * base = N / columns,  rem = N % columns
+ * 第 k 时隙发数 = (k &lt; base) ? columns : rem     ← 前 base 个时隙各满列，末尾剩 rem
+ * 闭合：base·columns + rem = N                   ← 发数永不丢，这条由测试钉住
  * </pre>
+ *
+ * 「横向优先」是本轮（#55）改掉的旧律。旧律是**时间优先**——先把一列的 C 格填满才开下一列
+ * （{@code x = N/C, y = N%C, columns = x + (y>0?1:0)}），于是只要 {@code N ≤ C} 就恒有
+ * {@code columns == 1}：整代挤在同一列的连续时隙里，张角因此永远是 0。六把枪的基础 N
+ * （脉冲 1／激光 1／散射 5／导弹 2／电弧 1／回旋 2）**全都 ≤ 自己的 C**，所以他看到的现象是
+ * 准确的——「pellets 每级加一后弹列未分开」：加一级只是把同一条竖线延长，屏幕上没有长出第二列。
+ * 新律把横向当成第一预算：N 发就是 N 列（到 {@link #COLUMN_CAP} 为止），"每级加一"每一级
+ * 多一根并列的弹链，散射基础立刻是一张 5 列 44° 的真扇面。裁定逐字（AskUserQuestion，
+ * 2026-10-01）：修到哪一层 =「两条都改」（分配律 ＋ 列间距），分开量 =「空 1 弹宽」。
+ *
+ * 两条上界不是重复：{@code COLUMN_CAP} 是**审美上限**（一发一列，铺到它为止），
+ * {@code ceil(N/C)} 是**时间预算逼出的最少列数**——列数若低于它，排放窗口 {@code used·interval}
+ * 就会跨过开火周期，下一代就绪时本代末尾的时隙还没发出去，被 {@code beginGeneration} 的游标
+ * 归零<b>静默吃掉</b>。所以取两者的大值；大值仍装不下才抛（{@link #layout}）。
  *
  * 「向上取整到整数个固定步」是 2026-09-25 实现时新加的一条，**它改掉的正是用户逐字给的判据**
  * （L14337，2026-09-25T07:19:15.178Z，answers-**FREE**「固定，但是取同子弹长度间隔需要的时间间隔」
@@ -68,13 +84,13 @@ import com.flexiatom.pixelraider.core.Time;
  * （电弧的物理间隔是 1.02 步，正好卡在"再一格就翻倍"的位置上）。DPS 一点不变——射速由周期决定，
  * 与 C 无关，变的只是链的疏密。
  *
- * 于是各武器的 C（{@code BulletChainTest} 扫真表钉住这些数）：
+ * 于是各武器的一列容量 C（{@code BulletChainTest} 扫真表钉住这些数）：
  * <pre>
  *   脉冲 8  激光 5  散射 18  导弹 13  电弧 7  回旋 11      （基础周期）
  * </pre>
- * 六个 C 都大于该武器的基础 N ⇒ <b>基础档全部是单列</b>（{@code x=0, y=N}），张角因此为 0；
- * 扇形要等扳机把 N 顶过 C 才出现。这不是丢功能：弹链的"多发"本来就先落在<b>时间</b>上，
- * 空间（列）只在装不下时才长出。
+ * C 在新律下**不再是列数的闸门**，只管"一列叠几发"：{@code N ≤ C} 时 {@code used == 1}，
+ * 整代一步打完（纯横向）；{@code N > C·COLUMN_CAP} 才需要更多列来分摊时间。激光恒 {@code N=1}
+ * ⇒ 恒单列（它不吃扳机，见下）。
  *
  * 周期取**有效冷却**（{@code fireGap / 射速乘子}），不是基础 fireGap。这一条同样是让"相切"成立的
  * 关键：乘子大 ⇒ 周期短 ⇒ C 小 ⇒ 列数多（前面变宽），而不是同列两发糊成一条实线；乘子小
@@ -84,11 +100,14 @@ import com.flexiatom.pixelraider.core.Time;
  * ⚠ 排放窗口 {@code C·interval} 只保证**不超出周期一步以上**，不保证严格小于周期：比值落在
  * 整数上时 EPS 会放行最后一格（真表达档：脉冲 @成长树 1.2× 射速 ⇒ 比值 6.999999 ⇒ C=7）。
  * 于是最后一个时隙可能与"下一代就绪"撞在同一步上，而 {@code beginGeneration} 会把游标归零——
- * 撞车时**必须先推进链再开下一代**，否则整代末尾的 {@code x = N/C} 发会被静默吃掉。那条顺序写在
- * {@code Game.step} 里并由 {@code BulletChainTest} 的撞车用例钉住。
+ * 撞车时**必须先推进链再开下一代**，否则整代末尾那个时隙（最多 {@code COLUMN_CAP} 发）会被
+ * 静默吃掉。那条顺序写在 {@code Game.step} 里并由 {@code BulletChainTest} 的撞车用例钉住。
+ * 横向优先之后这条更容易撞上（{@code used} 可以正好等于 C），所以那条顺序**不是历史包袱**。
  *
- * 列的几何：横向偏移 {@code (c − (columns−1)/2)·size}（列间距 = 1 弹宽，整组居中）+ 张角
- * {@link WeaponFire#pelletAngle}（"中心那发绝不偏"沿用旧 {@code spreadAngles} 的口径）。
+ * 列的几何：横向偏移 {@code (j − (columns−1)/2)·2·size}（列中心距 = 2 弹宽 ⇒ 相邻两列之间
+ * <b>空出整整一个弹宽</b>，整组居中）+ 张角 {@link WeaponFire#pelletAngle}（"中心那发绝不偏"
+ * 沿用旧 {@code spreadAngles} 的口径）。旧律的间距是 1 弹宽——那是"边缘相切、零空隙"，
+ * 两列看起来仍是一条带，正是 #55 的另一半病因。
  * ⇒ 单列武器恒为正上方一条链；多列武器既横向排开又按本武器张角张开。
  *
  * 布局只在**购买 / 换枪 / 有效冷却变化**时算一次（{@link #matches} 是三条浮点/整型比较），
@@ -97,29 +116,42 @@ import com.flexiatom.pixelraider.core.Time;
 public final class BulletChain {
 
     /**
-     * [可调] 定长数组容量。越界是**数值表配置错误**，{@link #layout} 直接抛、不静默钳
+     * [可调] 定长数组容量与横向上限。越界是**数值表配置错误**，{@link #layout} 直接抛、不静默钳
      * （先例 {@code SpatialGrid.insert}；"静默截断"正是本项目最恨的失败模式）。
      *
      * <p>余量按可达的**极限档**算，不按默认档算（{@code BulletChainTest} 把这段推导钉住）：
      * <pre>
      * 时隙上界 = 周期最长 ÷ 间隔：射速乘子最低档 0.75×0.9×0.9 = 0.6075（迟滞×寒潮×风暴），
      *            散射 0.30/0.6075 ÷ 一步 = 29  ← bound；导弹 22、回旋 18、脉冲 13、电弧 12、激光 8
-     * 列数上界 = 一代弹丸最多 ÷ 时隙最短：射速乘子上界 1.35×1.2 = 1.62（商店卡不再贡献射速：
-     *            裁定日 2026-09-25 = L14292 answers-FREE「射速本身固定，但是子弹每次+1」，
-     *            落地日 2026-09-26；"改卖发数"这四个字是我的措辞，不是他的），且扳机取消满级后按收入上界贪婪叠满 lv24 ⇒ N = 25 + 基础。
-     *            电弧 26/4 = 7 列 ← bound；脉冲 26/5 = 6、导弹 27/8 = 4、回旋 27/7 = 4、散射 30/11 = 3。
-     *            （激光 26/3 = 9 更大，但它不吃扳机——这条例外是用户第一手逐字：L14337 answers-FREE
+     *            （C 在新律下是"一列容量"，{@code used ≤ C} 才是数组用量，所以这条 bound 照旧。）
+     * 列数上界 = 两个来源取大：审美上限 {@link #COLUMN_CAP} = 8，或时间预算逼出的 ceil(N/C)。
+     *            后者按**可达**档位实算最大 7（脉冲 @1.62× ⇒ C=5、电弧 @1.62× ⇒ C=4，N=26），
+     *            所以正常玩每一把枪都停在 8 列。但扫描档里它更大：激光按 @1.944× 且强行给满发数
+     *            ⇒ C=2 ⇒ 逼出 13 列，那条组合两重都不达（1.944 已随商店射速卡退役、激光又不吃发数卡），
+     *            留在扫描里是因为"今后谁把这两条例外加回来"正是它先炸的场景 ⇒ 16 这个硬顶**不是纸面余量**。
+     *            发数上界的来历：射速乘子上界 1.35×1.2 = 1.62（商店卡不再贡献射速：裁定日 2026-09-25 =
+     *            L14292 answers-FREE「射速本身固定，但是子弹每次+1」，落地日 2026-09-26；
+     *            "改卖发数"这四个字是我的措辞，不是他的），且扳机取消满级后按收入上界贪婪叠满
+     *            lv24 ⇒ N = 25 + 基础。
+     *            （激光 N 恒 1，因为它不吃扳机——这条例外是用户第一手逐字：L14337 answers-FREE
      *            「子弹类武器都是这套，也就是除激光外的所有」＋ L14357 answers-FREE「激光的规则是接触到
-     *            激光的扣固定血，只吃+几伤害，不存在射速一说」；这里把它算进来也不越界，所以数组容量
-     *            **不依赖那条例外**。玩家弹池 384 先前挂着"只有靠这条例外才成立"的同一条账，
-     *            按量化周期复算之后也不成立了：激光若吃扳机是 15 代 × 25 = 375 ≤ 384，
-     *            只剩 9 发余量 ⇒ 那条 bound 用例的"余量至少一代"会替它红。）
+     *            激光的扣固定血，只吃+几伤害，不存在射速一说」。旧律里它是"26/3 = 9 列"那条潜在越界者，
+     *            新律里它只有被强行喂满发数才碰得到横向预算（上面那条 13 列）⇒ 数组容量同样
+     *            **不依赖那条例外**。）
      * </pre>
-     * 于是取 40 / 16：时隙留 38% 余量，列数留 1.8 倍余量。两个数都是**静态可达上界**，
+     * 于是取 40 / 16：时隙留 38% 余量，列数在审美上限之上再留 2 倍硬顶。两个数都是**静态可达上界**，
      * 不是"当前表跑出来的值"——今后把某把枪的 {@code fireGap} 或弹速改到越界，应该让它在这里炸。
      */
     public static final int MAX_SLOTS = 40;
     public static final int MAX_COLUMNS = 16;
+
+    /**
+     * [可调] 横向审美上限：一代最多铺开几列，超过它才往时间（时隙）上叠。
+     *
+     * <p>8 的来历是**画布**不是池：逻辑宽 240，最宽的那把枪弹体 4px ⇒ 列间距 8px ⇒ 满 8 列
+     * 总宽 56px（±28），机头贴边时机头外侧那几列出膛点就在屏外。再宽就成了一条横辐而不是扇面。
+     */
+    public static final int COLUMN_CAP = 8;
 
     /** 浮点除法的兜底格子，只用于两次取整，见 {@link #layout}。 */
     private static final float EPS = 1e-4f;
@@ -135,6 +167,7 @@ public final class BulletChain {
 
     private float interval;
     private int slots;
+    private int periodSlots;
     private int columns;
     private int totalPellets;
 
@@ -162,8 +195,11 @@ public final class BulletChain {
     /** 固定时隙间隔（秒）——恒为 {@link Time#STEP} 的整数倍，这正是"每帧最多发一个时隙"的保证。 */
     public float slotInterval() { return interval; }
 
-    /** 一列的时隙数 C。 */
+    /** 这一代**实际占用**的时隙数（横向优先之后它可以小于 {@link #periodSlots()}）。 */
     public int slots() { return slots; }
+
+    /** 一列的容量 C = 周期装得下几个时隙。排放窗口必须落在它里面，见 {@link #layout}。 */
+    public int periodSlots() { return periodSlots; }
 
     public int columns() { return columns; }
 
@@ -186,9 +222,13 @@ public final class BulletChain {
      * 算一次布局。**不动发射进度**（{@code next/acc} 归 {@link #beginGeneration} 管）——
      * "换枪不清链"与"换枪不清已飞的弹"是同一条口径：已经排出去的那一代不该被下一次布局抹掉。
      *
+     * <p>列数取「审美上限」与「时间预算逼出的最少列数」的大值（{@code used ≤ C} 是本方法的
+     * 出口不变式）；每列间距 2 弹宽，见 {@link #columnPitch}。
+     *
      * @param pellets 这一代的弹丸总数 N（≥1；调用方负责加扳机卡的加成）
      * @param period  当前的**有效**开火周期（秒）= {@code fireGap / 射速乘子}
-     * @throws IllegalStateException 布局超出定长数组——那说明数值表被改坏了，不是运行时该吞的事
+     * @throws IllegalStateException 周期或弹速/弹长非法，或布局超出定长数组／时隙装不进周期——
+     *                               那说明数值表被改坏了，不是运行时该吞的事
      */
     public void layout(Balance.Weapon w, int pellets, float period) {
         int n = pellets < 1 ? 1 : pellets;
@@ -208,32 +248,48 @@ public final class BulletChain {
         if (steps < 1) steps = 1;                  // 亚步长间隔的最短可表达形式就是一步
         float iv = steps * Time.STEP;
         int c = (int) Math.floor(period / iv + EPS);
-        if (c < 1) c = 1;                              // 周期短于一个间隔：退化成单时隙（宁可重叠不可丢发）
+        if (c < 1) c = 1;                              // 周期短于一个间隔：只能全靠横向铺开（used 必为 1）
         if (c > MAX_SLOTS) {
             throw new IllegalStateException("chain slots " + c + " > MAX_SLOTS=" + MAX_SLOTS
                     + ": " + w.name + " period=" + period + " interval=" + iv);
         }
-        int x = n / c;
-        int y = n % c;
-        int cols = x + (y > 0 ? 1 : 0);
-        if (cols > MAX_COLUMNS) {
-            throw new IllegalStateException("chain columns " + cols + " > MAX_COLUMNS=" + MAX_COLUMNS
-                    + ": " + w.name + " pellets=" + n + " slots=" + c);
+        int want = n < COLUMN_CAP ? n : COLUMN_CAP;   // 一发一列，铺到审美上限
+        int need = (n + c - 1) / c;                   // 时间预算逼出的最少列数（窗口必须落在周期里）
+        int cols = Math.min(MAX_COLUMNS, Math.max(want, need));
+        int used = (n + cols - 1) / cols;
+        if (used > c) {
+            // 到了数组硬顶还是装不下：宁可抛，不静默丢发——丢发在账本上和"这一代少买一级"同形。
+            throw new IllegalStateException("chain window " + used + " slots > period capacity " + c
+                    + " at MAX_COLUMNS=" + MAX_COLUMNS + ": "
+                    + w.name + " pellets=" + n + " interval=" + iv);
         }
         layoutWeaponId = w.id;
         layoutPellets = n;
         layoutPeriod = period;
         interval = iv;
-        slots = c;
+        periodSlots = c;
+        slots = used;
         columns = cols;
         totalPellets = n;
-        for (int k = 0; k < c; k++) {
-            pelletsAt[k] = x + (y > 0 && k < y ? 1 : 0);
+        int base = n / cols;
+        int rem = n % cols;
+        for (int k = 0; k < used; k++) {
+            pelletsAt[k] = k < base ? cols : rem;     // 闭合 base·cols + rem = N
         }
         for (int j = 0; j < cols; j++) {
-            colOffset[j] = (j - (cols - 1) / 2f) * w.size;
+            colOffset[j] = (j - (cols - 1) / 2f) * columnPitch(w);
             colAngle[j] = WeaponFire.pelletAngle(j, cols, w.spreadDeg);
         }
+    }
+
+    /**
+     * 相邻两列的中心距 = 2 个弹宽 ⇒ 列与列之间恰好<b>空出一个弹宽</b>。
+     *
+     * <p>旧律是 1 弹宽（边缘相切、零空隙），两列在屏幕上读起来还是同一条带——那是 #55 的另一半
+     * 病因（"弹列未分开"）。裁定（2026-10-01，AskUserQuestion）逐字：分开量按「空 1 弹宽」。
+     */
+    private static float columnPitch(Balance.Weapon w) {
+        return w.size * 2f;
     }
 
     /**

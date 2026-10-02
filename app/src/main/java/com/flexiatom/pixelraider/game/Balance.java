@@ -1001,7 +1001,7 @@ public final class Balance {
                         // 被本条注释自身改写的读数：「扳机」散在 10 个文件，其中**字符串字面量** 6 处 /
                         // 3 个测试文件（BulletAndGridTest、MissilesTest、ShopRulesTest，剥注释后扫）；
                         // 行数不写——它会被这次加进来的两行注释自己改掉，写了当场过期。
-                        // 两类不可改：动作叙述（BulletChain「扇形要等扳机把 N 顶过 C」）与他的逐字原文。
+                        // 两类不可改：动作叙述（BulletChain「扳机卡的加成已经算进 pellets」）与他的逐字原文。
                         // 文案的两处用词都是硬闸门逼出来的：①「激光不吃」不能写成「激光除外」——
                         // 「除」不在内嵌字集（EmbeddedFontTest 真读 cmap，缺字即红）；② tip 长度
                         // ≤ 15 字，因为 ShopLayoutTest 钉死 longest×12px ≤ 181px。真正承重的有**两张**
