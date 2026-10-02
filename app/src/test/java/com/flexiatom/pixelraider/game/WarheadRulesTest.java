@@ -840,6 +840,44 @@ public final class WarheadRulesTest {
         new Warheads(8, 32);      // 上界本身必须放行，否则这条会退化成"永远红"
     }
 
+    // ---- 引爆分路：杆是买来的（2026-10-02，他逐字裁「新增『连续杆』卡，未买靠撞击」）----------
+
+    /**
+     * 三格真值表，一格都不许合成两格：
+     * <ul>
+     *   <li>买了杆 ⇒ 走杆，**与撞没撞到人无关**（空视场自爆那一发也展开——它是弹自己打完了
+     *       这一发，R13 那条口径没变）。</li>
+     *   <li>没买杆、且引信碰到了某只 ⇒ 走弹体撞击，单体。</li>
+     *   <li>没买杆、也没碰到任何一只 ⇒ 什么都不放。这一格是"未买靠撞击"唯一可能的否半条：
+     *       撞不到就是没打到，此时放一团杆或放一次撞击都是无中生有。</li>
+     * </ul>
+     * 它是 {@code Game.detonateMissile} 那三行的唯一可测部分（{@code Game} 是渲染类，JVM 直调必炸），
+     * 所以这里钉的是**路由**，扣血与 {@code killEnemy} 仍在结构性零覆盖那一侧。
+     */
+    @Test
+    public void detonationRoutesTheWarheadByCardOwnership() {
+        assertEquals("买了杆就不该看撞没撞", WarheadRules.ROUTE_ROD,
+                WarheadRules.detonationRoute(true, 3));
+        assertEquals("买了杆、这一发谁也没碰到，也仍然展开", WarheadRules.ROUTE_ROD,
+                WarheadRules.detonationRoute(true, -1));
+        assertEquals("没买杆、撞到了 ⇒ 只撞那一只", WarheadRules.ROUTE_IMPACT,
+                WarheadRules.detonationRoute(false, 3));
+        assertEquals("没买杆、谁也没碰到 ⇒ 什么都不放", WarheadRules.ROUTE_NONE,
+                WarheadRules.detonationRoute(false, -1));
+    }
+
+    /**
+     * 槽号是 {@code Missiles} 池里的**槽**号，不是数组下标：0 是一个合法目标，
+     * 而"没锁到"用 −1 表达。所以 −1 与 0 必须分家——若把判据写成"槽号非零"，0 号敌机会被
+     * 读成"没撞到人"，未买卡那一发打在池里第一只身上就零伤害（安静地少一档，没人报）。
+     */
+    @Test
+    public void slotZeroIsATargetNotTheAbsenceOfOne() {
+        assertEquals("槽 0 是合法目标，不许退成撞击之外的另一格", WarheadRules.ROUTE_IMPACT,
+                WarheadRules.detonationRoute(false, 0));
+        assertEquals(WarheadRules.ROUTE_ROD, WarheadRules.detonationRoute(true, 0));
+    }
+
     // ---- 助手 -------------------------------------------------------------------------------
 
     /** 以固定 dt 喂满一段世界时长，返回结算总次数（{@link #tickCountIsTheSameAtSixtyAndThirtyFrames}）。 */

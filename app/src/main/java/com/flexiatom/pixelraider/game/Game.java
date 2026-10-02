@@ -1294,7 +1294,8 @@ public final class Game implements GameThread.Host {
     /**
      * 满池淘汰：被踢的那一枚**只播自毁动画**——不展开战斗部、不结算伤害、不计命中（R22 裁的
      * "静默"静的是**结算**这一半，不是画面）。于是"永不拒发"与"没有弹会无声消失"同时成立：
-     * 按下去那一下永远会出弹，被踢的那枚在屏幕上留下一团粒子，读得出"它是没了、不是打完了"。
+     * 按下去那一下永远会出弹，被踢的那枚在屏幕上留下一团**哑火**小烟（{@link #spawnMisfire}），
+     * 读得出"它是没了、不是打完了"。
      * <p>⚠ 与 R13 **刻意分路**：空视场自爆走 {@link #detonateMissile} 照常展开并结算（那半是弹自己
      * 打完了这一发），这里不借那条路——合回一个调用就等于把 R22 的裁定吃掉。
      * <p>⚠ 必须紧接 {@code chain.step}：{@link Missiles#evicted} 是**池外的唯一副本**，同一次排放里
@@ -1304,7 +1305,7 @@ public final class Game implements GameThread.Host {
         long total = missiles.evictTotal();
         if (total == evictSeen) return;
         evictSeen = total;
-        spawnBurst(missiles.evicted.x, missiles.evicted.y, 12, missiles.evicted.color);
+        spawnMisfire(missiles.evicted.x, missiles.evicted.y);
     }
 
     /**
@@ -1348,9 +1349,10 @@ public final class Game implements GameThread.Host {
             // ⇒ 选这一档是他的决定，但这句标签是我的措辞。三路合流后差别只在**记账**——撞敌/引信算这一发
             // 命中，空视场自爆不算；这条记账口径是我定的，他没谈过命中怎么算。
             if ((flags & MissileBehavior.FLAG_DETONATE) != 0) {
-                detonateMissile(m, true);
+                detonateMissile(m, true, behavior.fusedSlot());
             } else if ((flags & MissileBehavior.FLAG_SELF_DESTRUCT) != 0) {
-                detonateMissile(m, false);
+                // 自爆这一路必然没撞到人（引信那一句排在它前面，撞到了就走上面那条），所以槽号给 -1
+                detonateMissile(m, false, -1);
             }
             if (MissileBehavior.isRetired(flags)) pool.killAt(i);
         }
@@ -1385,13 +1387,12 @@ public final class Game implements GameThread.Host {
         stepDogEvictions();
     }
 
-    /** 格斗池的满池淘汰：与 {@link #stepEvictions} 同一条 R22 口径（只播动画、不结算）。 */
+    /** 格斗池的满池淘汰：与 {@link #stepEvictions} 同一条 R22 口径（只播动画、不结算），也同一团哑火。 */
     private void stepDogEvictions() {
         long total = dogfightMissiles.evictTotal();
         if (total == dogEvictSeen) return;
         dogEvictSeen = total;
-        spawnBurst(dogfightMissiles.evicted.x, dogfightMissiles.evicted.y,
-                12, dogfightMissiles.evicted.color);
+        spawnMisfire(dogfightMissiles.evicted.x, dogfightMissiles.evicted.y);
     }
 
     /**
@@ -1403,24 +1404,57 @@ public final class Game implements GameThread.Host {
     }
 
     /**
-     * 展开战斗部：生出一根垂直弹轴的连续杆亮线，附带一次视觉反馈。弹体本身**不造成伤害**——
-     * 伤害只从杆与碎片走。亮线形状与伤害档位出自记录 L14750 feedback(status=rejected)（真人自敲），
+     * 引爆这一发。三条出口由 {@link WarheadRules#detonationRoute} 判（判据不在这里，理由见那里）。
+     *
+     * <p>亮线形状与伤害档位出自记录 L14750 feedback(status=rejected)（真人自敲），
      * UTC 2026-09-25T09:19:51.727Z = 本地 2026-09-25 17:19:51，他的字「命中接近后展开连续杆战斗部
      * （在这里是垂直于导弹的一条亮线）」「接触到亮线的扣完整伤害，接触到破碎碎片的扣四分之一
-     * （向下取整，最小为1）」⇒ 杆与碎片各一档是他的措辞；"弹体本身不造成伤害" 是我把它补成
-     * 了互斥口径，属我的推导。**空视场**自爆也走这一条展开（方案里编号 R13，同 L14773：那句标签是
-     * 我的措辞，选它的是他的）；⚠ 满池淘汰**不在这条路上**，它只播动画、不结算（R22，见 {@link #stepEvictions}）。
+     * （向下取整，最小为1）」⇒ 杆与碎片各一档是他的措辞。
      *
-     * <p>池满时 {@code spawnRod} 返回 null ⇒ 少一根杆，玩家看不出来，但
-     * {@link Warheads#refuseTotal()} 会记账（"看不出来的截断"和"静默的截断"不是一回事）。
+     * <p><b>连续杆现在是买来的</b>（他 2026-10-02 逐字裁「新增『连续杆』卡，未买靠撞击」）。这条改动
+     * 作废的是我旧注释里那句"弹体本身不造成伤害"——那句本来就是<b>我</b>把他那两档措辞补成的互斥口径
+     * （他没谈过弹体）。现在没买卡时弹体确实造成伤害，判据钉在 {@link WarheadRules} 那张真值表里。
+     *
+     * <p>杆与撞击**共用同一个伤害数值**（都走 {@link WeaponFire#damageOf(float)} 读 {@code m.damage}）：
+     * 卡买的是"这一发炸开成一条线、顺带碎片"，不是"这一发更疼"。所以单只敌人吃到的总伤害不因买卡而变，
+     * 变的是**一次能打几只**。
+     *
+     * <p>⚠ 满池淘汰**不在这条路上**（R22：只播动画、不结算，见 {@link #stepEvictions}）；空视场自爆
+     * 走这一条但不算命中（那是我的记账口径，他没谈过命中怎么算）。池满时 {@code spawnRod} 返回 null
+     * ⇒ 少一根杆，玩家看不出来，但 {@link Warheads#refuseTotal()} 会记账（"看不出来的截断"和
+     * "静默的截断"不是一回事）。
      */
-    private void detonateMissile(Missiles.Missile m, boolean countsAsHit) {
+    private void detonateMissile(Missiles.Missile m, boolean countsAsHit, int fusedSlot) {
         if (countsAsHit) stats.addHit();
-        WarheadRules.spawnRod(warheads, m, Balance.missile);
+        int route = WarheadRules.detonationRoute(shopRun.rodOn(), fusedSlot);
+        if (route == WarheadRules.ROUTE_ROD) {
+            WarheadRules.spawnRod(warheads, m, Balance.missile);
+        } else if (route == WarheadRules.ROUTE_IMPACT) {
+            settleImpact(m, fusedSlot);
+        }
         spawnBurst(m.x, m.y, 12, m.color);
         shake = Math.max(shake, 0.45f);
         hitStop.arm(HitStop.secondsFor(0.2f));
         if (haptics != null) haptics.tick();
+    }
+
+    /**
+     * 撞击档结算：把这一发的伤害打在**引信碰到的那一只**身上。
+     *
+     * <p>只打一只、不做半径采样，两条理由：① 槽号是现成的（{@link MissileBehavior#fusedSlot()}），
+     * 而这里**没有网格可查**——{@code rebuildGrid} 排在 {@code collide} 里、晚于本步
+     * （{@code stepMissiles} 在它之前），拿帧首快照去圈"弹体半径内的敌人"会漏掉本步刚挪进来的那只；
+     * ② 卡面说的是"没买杆只撞单体"，圈出一片就是另一句假话。
+     *
+     * <p>三条动作照 {@link #settleContact} 那套抄：判 null、判 {@code hp <= 0}（同一步里可能已经
+     * 被别的结算打死，摘表要到 {@link #reapDead}）、打死者走 {@link #killEnemy}（不接就无分数无掉落）。
+     */
+    private void settleImpact(Missiles.Missile m, int slot) {
+        Enemies.Enemy e = enemies.objAt(slot);
+        if (e == null || e.hp <= 0) return;
+        e.hp -= WeaponFire.damageOf(m.damage);
+        e.hitFlash = 0.09f;
+        if (e.hp <= 0) killEnemy(e, m.crit);
     }
 
     private void stepBullets(float dt) {
@@ -1879,6 +1913,33 @@ public final class Game implements GameThread.Host {
     }
 
     // ---- 特效 -------------------------------------------------------------------------------
+
+    /**
+     * 哑火：满池淘汰那一枚的动画（他 2026-10-02 逐字裁「分开：淘汰改『哑火』小烟」）。
+     *
+     * <p>它存在的唯一理由是**与引爆分得开**：淘汰的弹**没有炸**（不展开战斗部、不结算，R22），
+     * 而旧写法直接借了 {@link #spawnBurst} 的 12 粒 ＋ 弹体本色 ＋ 一粒白心，与真炸开同形同色，
+     * 于是玩家在屏幕上读成"它打中了"。这里三处都反着来：粒子少（5）、色固定为暗灰蓝
+     * （不借弹色，两条流的哑火因此同形）、只用方粒不借 KIND_TRAIL 那种拖尾。**颜色与粒数是我定的**，
+     * 他给的只有「哑火」「小烟」这两个词。
+     */
+    private void spawnMisfire(float x, float y) {
+        for (int i = 0; i < 5; i++) {
+            Particle p = particles.spawn();
+            if (p == null) return;
+            float a = i * 1.26f;
+            p.x = x; p.y = y;
+            p.px = x; p.py = y;                   // 与当前位置同步，第一帧才不会拉出长尾
+            p.vx = (float) Math.cos(a) * 22f;
+            p.vy = (float) Math.sin(a) * 22f - 8f; // 那一下上飘：读成冒烟，不是炸开
+            p.gravity = -6f;
+            p.drag = 2.4f;
+            p.size = 1;
+            p.maxLife = p.life = 0.3f + (i % 3) * 0.1f;
+            p.color = Ink.DIM;
+            p.kind = Particle.KIND_SQUARE;
+        }
+    }
 
     /** 一次爆炸：全部走 {@link ParticlePool#spawn()}，池满就少几粒，帧内不 new 对象。 */
     private void spawnBurst(float x, float y, int n, int color) {

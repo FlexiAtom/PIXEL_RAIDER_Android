@@ -550,6 +550,23 @@ public final class MissileBehavior {
         return (flags & (FLAG_DETONATE | FLAG_SELF_DESTRUCT | FLAG_GONE)) != 0;
     }
 
+    /**
+     * 上一次 {@link #advance} 里**引信碰到的那只敌人**的 obj 槽号，-1 = 谁都没碰到。
+     * {@link #FLAG_DETONATE} 的唯一来源就是 {@code scanOut[OUT_FUSED] >= 0} 那一句，所以
+     * "返回了引爆"与"这里给出一个非负槽号"是同一件事的两面。
+     *
+     * <p>⚠ **读窗口只有一步**：{@code scanOut} 是这一流实例上的**一份**，同一次 {@code stepPool}
+     * 循环里读完下一枚弹就被覆盖。调用方必须在拿到 flags 的**紧接下一步**读它（与 {@code OUT_PICKED}
+     * 在 ⑤ 段里的用法同一条约束），隔帧读会读到别人的弹。"没杆时撞了谁就扣谁的血"这条结算路
+     * （{@link WarheadRules#detonationRoute}）就是为它加的。
+     *
+     * <p>⚠ 槽号可能指向**已被摘表**的 obj：调用方要自己判 null 与 {@code hp <= 0}，
+     * 这条义务与 {@code SpatialGrid.query} 那处一字不差。
+     */
+    public int fusedSlot() {
+        return scanOut[OUT_FUSED];
+    }
+
     // ---- 内部 -----------------------------------------------------------------------------
 
     /**

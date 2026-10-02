@@ -81,6 +81,13 @@ public final class SpriteSheets {
      */
     public static final int ID_SHOP_MISSILE = 30;
     public static final int ID_SHOP_BEAM = 31;
+    /**
+     * 连续杆（2026-10-02，他逐字裁「新增『连续杆』卡，未买靠撞击」）。它刻意做成
+     * {@link #SHOP_MISSILE} 的**同一枚弹加一条横亮线**——因为这张卡卖的就是那枚弹的战斗部，
+     * 图标把弹体原样画回去、只在中间多一条线，读起来正是"同一发，炸开成一片"。
+     * 若另起形状（又一条弯弹道、又一个扇形），它会与簇 II 那三张撞成同一句话。
+     */
+    public static final int ID_SHOP_ROD = 32;
 
     /** 玩家机：11×11，机头朝上（朝向由实际位移旋转绘制，不在网格里画四个方向）。 */
     public static final String[] SHIP = {
@@ -500,6 +507,22 @@ public final class SpriteSheets {
     };
 
     /**
+     * 连续杆：{@link #SHOP_MISSILE} 的弹体原样不动，中段换成一条亮线（那一行由 4 铺满、
+     * 只留两格深色是让弹体轮廓**穿过**亮线——杆是加在弹上的，不是替掉弹）。
+     */
+    public static final String[] SHOP_ROD = {
+            "....0....",
+            "...040...",
+            "...040...",
+            "...040...",
+            "444040444",
+            "...040...",
+            ".0.040.0.",
+            "040444040",
+            "..0...0..",
+    };
+
+    /**
      * 按**玩法枚举的序号**索引的网格表：小怪读 {@code Balance.Enemy.STRAIGHT..BURSTER}、
      * Boss 读 {@code Balance.Boss.DESTROYER..FORTRESS}、掉落读 {@code Drops.CHIP..BOMB}。
      *
@@ -525,7 +548,7 @@ public final class SpriteSheets {
     };
     /**
      * 商店卡图标：下标对齐 {@code Balance.ShopCard} 的 id 常量（FIREPOWER..RANDOM，再加簇 II 的
-     * MID_COURSE/IGNITION/HANDLING/DOGFIGHT，最后是两张武器解锁卡 MISSILE/BEAM）。五张一次性
+     * MID_COURSE/IGNITION/HANDLING/DOGFIGHT/ROD，最后是两张武器解锁卡 MISSILE/BEAM）。五张一次性
      * 补给卡复用掉落图标（HP/盾/炸弹/能量/金币），
      * 所以这里**不是**每个 id 一张新网格，而是同形状的第二次引用。
      *
@@ -537,14 +560,14 @@ public final class SpriteSheets {
             DROP_HP, DROP_SHIELD, DROP_BOMB, DROP_POWERUP, SHOP_MAGNET, DROP_COIN,
             SHOP_RANDOM,
             SHOP_MID, SHOP_IGN, SHOP_HAND, SHOP_DOG,
-            SHOP_MISSILE, SHOP_BEAM,
+            SHOP_MISSILE, SHOP_BEAM, SHOP_ROD,
     };
     public static final int[] SHOP_ICON_IDS = {
             ID_SHOP_FIRE, ID_SHOP_RATE, ID_SHOP_CRIT, ID_SHOP_SPEED, ID_SHOP_HULL,
             ID_HP, ID_SHIELD, ID_BOMB, ID_POWERUP, ID_SHOP_MAGNET, ID_COIN,
             ID_SHOP_RANDOM,
             ID_SHOP_MID, ID_SHOP_IGN, ID_SHOP_HAND, ID_SHOP_DOG,
-            ID_SHOP_MISSILE, ID_SHOP_BEAM,
+            ID_SHOP_MISSILE, ID_SHOP_BEAM, ID_SHOP_ROD,
     };
 
     public static int widthOf(String[] rows) {

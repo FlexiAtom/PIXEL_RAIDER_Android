@@ -287,6 +287,34 @@ public final class WarheadRules {
         return w.life >= w.maxLife;
     }
 
+    // ---- 引爆这一发该走哪条伤害路 ---------------------------------------------------------
+
+    /** 展开连续杆亮线（群体：杆本体 ＋ 到期后的碎片）。 */
+    public static final int ROUTE_ROD = 0;
+    /** 弹体撞在引信碰到的那一只身上（单体，伤害数值与杆同源）。 */
+    public static final int ROUTE_IMPACT = 1;
+    /** 什么都不放：既没买杆，这一发也没撞到任何敌人（没买卡时的空视场自爆正是这一格）。 */
+    public static final int ROUTE_NONE = 2;
+
+    /**
+     * 引爆的三条出口，一张真值表钉死。**判据留在这里而不是写进 {@code Game} 的 if**，两条理由：
+     * 本类的类注释那条（{@code Game} 在 JVM 侧结构性零覆盖）；而这一行**就是「连续杆改由卡给」
+     * 那条裁定的本体**——它没有自动化证据就等于没落地。
+     * <pre>
+     * 买了「连续杆」            ⇒ ROUTE_ROD     （不论有没有撞到人：空视场自爆也展开，R13 是他的决定）
+     * 没买 ＋ 引信碰到敌人      ⇒ ROUTE_IMPACT
+     * 没买 ＋ 谁都没碰到就自爆  ⇒ ROUTE_NONE
+     * </pre>
+     * 第三格是**有意**的：那一发本来就不记命中（{@code countsAsHit=false} 同一条口径），
+     * 没杆时它连撞击对象都没有，硬造一个"原地炸一下不掉血"只会多一条说不清的动画。
+     *
+     * @param fusedSlot {@link MissileBehavior#fusedSlot()}；-1 = 这一发没撞到任何敌人
+     */
+    public static int detonationRoute(boolean rodOwned, int fusedSlot) {
+        if (rodOwned) return ROUTE_ROD;
+        return fusedSlot >= 0 ? ROUTE_IMPACT : ROUTE_NONE;
+    }
+
     /**
      * 生出亮线：中心 = 弹位，速度 = **弹的速度全额继承 ＋ {@code rodEjectSpeed} 沿弹轴**
      * （伽利略叠加，不是倍乘——他 L41661「战斗部是伤害，弹速是弹速…这不就是在运动的小车上丢出

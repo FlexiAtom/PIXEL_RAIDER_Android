@@ -169,6 +169,10 @@ public final class ShopRules {
             // 两张武器解锁卡（2026-10-02）与中段引导同形：卖的是"这一把在不在飞机上"，没有量。
             case Balance.ShopCard.BASIC_MISSILE: return 0f;
             case Balance.ShopCard.BASIC_LASER: return 0f;
+            // 连续杆（2026-10-02）同形：它改的是"这一发炸开算几只"，表上没有一个可加的数。
+            // ⚠ 这里的 0 与 default 那一路**撞不出来**：default 也返回 0f。它必须显式写，是因为
+            // coreKind 那一路要给这张卡挑「解锁」而不是「立即就绪」，而那张卡有没有数就看在不在这一格里。
+            case Balance.ShopCard.ROD: return 0f;
             default: return 0f;
         }
     }
@@ -201,6 +205,9 @@ public final class ShopRules {
             // 读同一个 weaponUnlockMaxLevel 是刻意的——这两张的"级数"不是一个可分别调的量（见 Balance 那条）。
             case Balance.ShopCard.BASIC_MISSILE:
             case Balance.ShopCard.BASIC_LASER: return k.weaponUnlockMaxLevel;
+            // 连续杆：买断一级（同中段引导）。这一格**不写就会安静地坏**——default 是 UNLIMITED，
+            // 表现是买过之后它永远留在货架上，而一张没有第二级可买的卡反复上架就是假商品。
+            case Balance.ShopCard.ROD: return k.rodMaxLevel;
             default: return UNLIMITED;
         }
     }
@@ -225,6 +232,9 @@ public final class ShopRules {
             // 两张武器解锁卡同族：买断一个机制（这一把在不在飞机上），没有累计等级可画。
             case Balance.ShopCard.BASIC_MISSILE:
             case Balance.ShopCard.BASIC_LASER:
+            // 连续杆同族：买断的是"这一发炸不炸成一片"，没有累计等级可画（default 是 true，
+            // 漏这一格就会在卡角印出「Lv 0」——那张卡买过一次就下架，那行字永远是废话）。
+            case Balance.ShopCard.ROD:
                 // 中段引导与格斗导弹都是买断：只有"买过/没买过"两态，而买过之后这张卡就下架了，
                 // 所以「Lv 0」是它唯一会上屏的一行废话——判据仍是那条"收益随不随累计等级变多"。
                 return false;
@@ -285,16 +295,19 @@ public final class ShopRules {
             // 掉回上限之内才重新出现。所以这里**不能**改成恒真，也不能在 PlayerState 里再钳一次。
             case Balance.ShopCard.SHIELD: return s.shield < s.maxShield;
             case Balance.ShopCard.SURGE: return !s.overloadReady;
-            // 簇 II 那四张改的是**导弹的导引参数与那条流的发射判据**。手上没有导弹这一把时买它们，
-            // 数值一层没变、场上一点不动——这正是本方法的判据（"买了之后数值一定变"）要拦的那一种，
-            // 所以闸门挂在解锁卡上，而不是让四张卡各自变成"先存着，等哪天有了导弹再说"。
+            // 簇 II 那几张改的是**导弹的导引参数、那条流的发射判据与那发的战斗部**。手上没有导弹
+            // 这一把时买它们，数值一层没变、场上一点不动——这正是本方法的判据（"买了之后数值一定变"）
+            // 要拦的那一种，所以闸门挂在解锁卡上，而不是让下游每张各自变成"先存着，等哪天有了导弹再说"。
             // ⚠ 这条推论是我的，他不是这么说的：他裁的是「商店新增『基础导弹』和『基础激光』」＋
             // 「加个切换键」。但他报的病因（「格斗导弹购买后无效果」）里，"上游没开闸的下游照卖"
-            // 是第二半，只修切枪修不完——所以他一旦按这条裁定把导弹买了，货架上这四张才第一次真的有用。
+            // 是第二半，只修切枪修不完——所以他一旦按这条裁定把导弹买了，货架上那几张才第一次真的有用。
             case Balance.ShopCard.MID_COURSE:
             case Balance.ShopCard.IGNITION:
             case Balance.ShopCard.HANDLING:
             case Balance.ShopCard.DOGFIGHT:
+            // 连续杆（2026-10-02）也在闸门之后：它改的是**弹体炸开那一下**，没有导弹这一把时
+            // 场上没有任何一发会走到那条路，买下去数值层没变、画面层也没变。
+            case Balance.ShopCard.ROD:
                 return s.levelOf(Balance.ShopCard.BASIC_MISSILE) > 0;
             default: return true;
         }
@@ -555,12 +568,15 @@ public final class ShopRules {
                 return CORE_COUNT;
             case Balance.ShopCard.RANDOM:
                 return CORE_CHOICE;                // 没有数，只有"四选一"这件事
-            // 簇 II 四张**必须显式写死**：default 那一路画「立即就绪」，而这四张没有一样是立即的。
+            // 簇 II 那几张**必须显式写死**：default 那一路画「立即就绪」，而它们没有一样是立即的。
             case Balance.ShopCard.MID_COURSE:
             case Balance.ShopCard.DOGFIGHT:
             // 两张武器解锁卡与上面同族：这一把在不在飞机上不是一个数，卡面只剩「解锁」可印。
             case Balance.ShopCard.BASIC_MISSILE:
             case Balance.ShopCard.BASIC_LASER:
+            // 连续杆也走这一格：default 会印「立即就绪」，而这卡买的是一条**常驻**的战斗部规则，
+            // 没有"立即"也没有"数"。
+            case Balance.ShopCard.ROD:
                 return CORE_UNLOCK;                // 买断一个机制，卡面只说"解锁"
             case Balance.ShopCard.IGNITION:
                 return CORE_PX;                    // 每级加长的是导引头半径（px）

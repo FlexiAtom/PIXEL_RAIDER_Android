@@ -194,6 +194,19 @@ public final class ShopRun {
         return levelOf(Balance.ShopCard.DOGFIGHT) > 0;
     }
 
+    /**
+     * 连续杆（2026-10-02，他逐字裁「新增『连续杆』卡，未买靠撞击」）：**买断**，所以这里只有
+     * "有没有"、没有"几级"。
+     *
+     * <p>⚠ 这个开关改的是**炸开算几只**，不是伤害数值——唯一读取点是
+     * {@code Game.detonateMissile} 里那条分路（{@code WarheadRules.detonationRoute}）：
+     * 真 ⇒ 展开杆与碎片，假 ⇒ 弹体只撞引信碰到的那一只。它天生带的时期写过一句
+     * "导弹命中接近后展开连续杆战斗部"（他 L14750），那句话从今天起要读成"买了杆才展开"。
+     */
+    public boolean rodOn() {
+        return levelOf(Balance.ShopCard.ROD) > 0;
+    }
+
     // ---- 武器持有（2026-10-02，他裁「商店新增『基础导弹』和『基础激光』」＋「加个切换键」）------
     // 这一格之所以必须存在，是因为「格斗导弹」那张卡今天买下去场上什么都没发生：它开的判据是
     // {@code dogfightOn() && player.weapon().guided}，而**制导那一把自己从来没卖过**——六把枪里
