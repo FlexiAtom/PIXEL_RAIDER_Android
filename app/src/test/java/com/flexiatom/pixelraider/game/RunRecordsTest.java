@@ -147,7 +147,7 @@ public class RunRecordsTest {
         reloaded.load(kv);
 
         ResultSheet sheet = new ResultSheet();
-        sheet.fill(stats(50, 100, 80, 12, 0, 2, 60f), 2000L, 6, 5, reloaded, kv);
+        sheet.fill(stats(50, 100, 80, 12, 0, 2, 60f), 2000L, 6, 5, false, reloaded, kv);
         assertTrue(sheet.newBest);
         assertEquals(1000L, sheet.bestBefore.score);     // 比的是破纪录**之前**那份
         assertEquals(1000L, sheet.lastBefore.score);
@@ -156,13 +156,33 @@ public class RunRecordsTest {
         assertEquals(6, sheet.current.waveReached);
     }
 
+    /**
+     * 通关标记住在快照里，而且**每次 fill 都必须重写它**。
+     *
+     * <p>第二条断言才是这条存在的理由：{@code ResultSheet} 是一局里复用的同一份对象。若
+     * {@code fill} 只在通关时写 true、平时不碰，那么"上一局打到底、这一局半路死掉"会把残留的
+     * true 带上结算页——页面顶着「全线贯通」画一次阵亡。那比"根本没有通关页"更坏，因为它看着像
+     * 已经修好了。所以这里两头都钉。
+     */
+    @Test
+    public void victoryFlagBelongsToTheSnapshotAndFillOwnsIt() {
+        MemStore kv = new MemStore();
+        RunRecords rec = new RunRecords();
+        ResultSheet sheet = new ResultSheet();
+        assertFalse("默认值不该是通关", sheet.victory);
+        sheet.fill(stats(50, 100, 80, 12, 0, 2, 60f), 2000L, 40, 40, true, rec, kv);
+        assertTrue(sheet.victory);
+        sheet.fill(stats(50, 100, 80, 12, 0, 2, 60f), 100L, 3, 2, false, rec, kv);
+        assertFalse("fill 之后残留的通关标记", sheet.victory);
+    }
+
     @Test
     public void dimensionsAndLetterComeOutOfTheTableNotTheScore() {
         MemStore kv = new MemStore();
         RunRecords rec = new RunRecords();
         ResultSheet sheet = new ResultSheet();
         // 全零：生存/击杀/效率/超载/风格都归 0，等级落最低档，不该出 NaN
-        sheet.fill(new RunStats(), 0L, 0, 0, rec, kv);
+        sheet.fill(new RunStats(), 0L, 0, 0, false, rec, kv);
         for (int i = 0; i < Rating.COUNT; i++) {
             assertEquals(0f, sheet.dims[i], 1e-6f);
         }
@@ -178,7 +198,7 @@ public class RunRecordsTest {
         ResultSheet sheet = new ResultSheet();
         // 击杀拉满、效率最差（一枪未中）
         RunStats s = stats(500, 100, 0, 300, 0, 6, 400f);
-        sheet.fill(s, 99999L, 30, 29, rec, kv);
+        sheet.fill(s, 99999L, 30, 29, false, rec, kv);
         assertEquals(0f, sheet.dims[Rating.EFFICIENCY], 1e-6f);
         assertEquals(1f, sheet.dims[Rating.KILL], 1e-6f);
         assertEquals(Rating.EFFICIENCY, sheet.worstDim());

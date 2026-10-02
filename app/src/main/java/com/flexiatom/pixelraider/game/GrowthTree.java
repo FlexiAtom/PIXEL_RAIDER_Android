@@ -75,7 +75,7 @@ public final class GrowthTree {
         return wallet;
     }
 
-    /** 死亡时把这局捡到的芯片存进钱包；负数来自被改坏的调用方，直接当 0。 */
+    /** 一局结束时把这局捡到的芯片存进钱包（死亡与通关都走这里）；负数来自被改坏的调用方，直接当 0。 */
     public void addWallet(int chips) {
         if (chips > 0) wallet += chips;
     }
@@ -113,7 +113,7 @@ public final class GrowthTree {
         return sum;
     }
 
-    // ---- 落盘（渲染线程只在死亡与购买这两个低频时机走到这里）--------------------------
+    // ---- 落盘（渲染线程只在一局结束与购买这两个低频时机走到这里；结束含死亡与通关两条终态）----
 
     /** 前缀下共 7 个键，读写成对；漏一个就会读回半棵树。 */
     public void writeTo(KeyValue kv) {

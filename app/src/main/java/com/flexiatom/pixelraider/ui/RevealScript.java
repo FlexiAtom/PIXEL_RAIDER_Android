@@ -24,7 +24,7 @@ package com.flexiatom.pixelraider.ui;
  * 这十个数字是**设计决定**而不是实现细节：它们决定"先读分数还是先读等级"，所以只住在这里一处，
  * 由 {@code RevealScriptTest} 逐个钉死。绘制端一律问它"第 n 段现在该露出多少"，不自己比时间。
  *
- * 揭示用 UI 时钟（规格 §五）：死亡那一刻起算的是界面时间，暂停不该把动画冻在半路。
+ * 揭示用 UI 时钟（规格 §五）：一局结束（死亡或通关）那一刻起算的是界面时间，暂停不该把动画冻在半路。
  */
 public final class RevealScript {
 

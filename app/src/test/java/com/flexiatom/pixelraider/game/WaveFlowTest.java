@@ -67,6 +67,28 @@ public class WaveFlowTest {
         assertEquals("刚进下一波应当在准备期，不是直接开刷", WaveFlow.PREP, f.phase());
     }
 
+    /**
+     * {@code debugReachFinalWave}（F8 取证键）只推**波号与队列**，通关本身仍由真的那条路判出来：
+     * 空队列 ⇒ 下一帧 {@code CLEAR} ⇒ 场上没敌人时 {@code closeWave} 自己走到 {@code VICTORY}。
+     *
+     * <p>这条存在的理由是 {@code Game} 那侧够不着：{@code Game.step} 末尾读 {@link WaveFlow#victory()}
+     * 的那一行是 #54 缺的出口本体，而 Game 要 Canvas、单测构造不了。于是把"什么条件下 victory() 会真"
+     * 这一段拆到这里来证——剩下"victory() 真了之后有没有人推结算页"归真机 F8 取证。
+     */
+    @Test
+    public void debugJumpToFinalWaveReachesVictoryThroughTheRealClose() {
+        WaveFlow f = flow(11L);
+        f.debugReachFinalWave();
+        assertEquals(Balance.wave.maxWave, f.wave());
+        assertEquals("推完还停在出怪相位：VICTORY 不是这里直接写上的", WaveFlow.SPAWN, f.phase());
+        for (int i = 0; i < 10 && !f.victory(); i++) {
+            assertEquals("清场路上不该再刷怪", WaveFlow.NONE, f.pollSpawn(DT, 0));
+        }
+        assertTrue("空队列 + 零存活，十帧内没走到 VICTORY", f.victory());
+        assertEquals("终波要算清过：生存评级读的是这个数", Balance.wave.maxWave, f.wavesCleared());
+        assertEquals("通关之后这块状态机就该静默", WaveFlow.NONE, f.pollSpawn(DT, 0));
+    }
+
     @Test
     public void wavesClearedCountsOnlyFinishedWaves() {
         WaveFlow f = flow(5L);

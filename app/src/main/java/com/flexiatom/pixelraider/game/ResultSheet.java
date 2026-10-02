@@ -21,7 +21,7 @@ package com.flexiatom.pixelraider.game;
 import com.flexiatom.pixelraider.plat.KeyValue;
 
 /**
- * 结算页要显示的全部事实（死亡那一刻算一次，此后只读到下一次死亡）。
+ * 结算页要显示的全部事实（一局**结束**那一刻算一次，此后只读到下一次结束——死亡或打完都走这里）。
  *
  * 为什么要这么一份快照：纪录落盘会同时覆盖 best 与 last，而结算页要比的是**破纪录之前**的那份
  * best 和**本局之前**的那份 last。先抄后写，顺序反了就会显示"本局比本局高 0 分"。
@@ -36,6 +36,12 @@ public final class ResultSheet {
     public float overall;
     public int letterIndex;
     public boolean newBest;
+    /**
+     * 这一局是**打完**了还是**打没了**（#54 的通关标记）。它由 {@link #fill} 拥有而不是让绘制端去问
+     * {@code WaveFlow}：结算页整页读的都在这份快照里，多留一条"顺手读一下实时波次"的口子，
+     * 就等于允许结算页在死后继续跟着世界走（{@code runOver} 之后波次不再推进，但顺序上没人保证这点）。
+     */
+    public boolean victory;
 
     /** 最弱的一维：规格说分段评级的目的是"指导改进"，那就得指出短板，不是夸长板。 */
     public int worstDim() {
@@ -46,8 +52,9 @@ public final class ResultSheet {
         return w;
     }
 
-    public void fill(RunStats s, long score, int waveReached, int wavesCleared,
+    public void fill(RunStats s, long score, int waveReached, int wavesCleared, boolean victory,
                      RunRecords records, KeyValue kv) {
+        this.victory = victory;
         Rating.dimensions(s, wavesCleared, Balance.grade, dims);
         overall = Rating.overall(dims, Balance.grade);
         letterIndex = Rating.letterIndex(overall, Balance.grade);

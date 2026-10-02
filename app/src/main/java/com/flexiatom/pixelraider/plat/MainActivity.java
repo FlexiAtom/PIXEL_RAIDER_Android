@@ -261,9 +261,10 @@ public final class MainActivity extends ComponentActivity {
     public boolean dispatchKeyEvent(android.view.KeyEvent event) {
         int code = event.getKeyCode();
         // 作弊键走事件环、不直接调 Game：面板是渲染线程在读，UI 线程上手改状态就是一条竞态
-        if (debugKeys && code == KeyEvent.KEYCODE_F9) {
+        if (debugKeys && (code == KeyEvent.KEYCODE_F9 || code == KeyEvent.KEYCODE_F8)) {
             if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
-                game.input().offerLogic(InputRouter.EV_DEBUG_KILL, -1, 0, 0, 0);
+                game.input().offerLogic(code == KeyEvent.KEYCODE_F9
+                        ? InputRouter.EV_DEBUG_KILL : InputRouter.EV_DEBUG_VICTORY, -1, 0, 0, 0);
             }
             return true;
         }

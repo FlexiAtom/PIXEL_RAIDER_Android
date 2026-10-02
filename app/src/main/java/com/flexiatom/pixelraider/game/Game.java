@@ -257,7 +257,7 @@ public final class Game implements GameThread.Host {
     private final ResultSheet sheet = new ResultSheet();
     /** 落盘出口。渲染线程拿不到 Context，由 plat 在启动时注入（规格 §八 的边界）。 */
     private KeyValue store = KeyValue.EMPTY;
-    /** 死亡那一刻的界面时间：结算页的分阶段揭示以它为原点。 */
+    /** 一局结束（死亡或通关）那一刻的界面时间：结算页的分阶段揭示以它为原点。 */
     private float resultAtUi;
     /** 拉开暂停那一刻的界面时间：入场动画与"淡完才可点"以它为原点（规格 §五 uiTime）。 */
     private float pauseAtUi;
@@ -528,6 +528,9 @@ public final class Game implements GameThread.Host {
                     break;
                 case InputRouter.EV_DEBUG_KILL:
                     debugEndRun();
+                    break;
+                case InputRouter.EV_DEBUG_VICTORY:
+                    debugForceVictory();
                     break;
                 default:
                     break;
@@ -1037,6 +1040,11 @@ public final class Game implements GameThread.Host {
             // 趋势采样吃**世界步长**：暂停与定格都不算进折线（规格 §四"每 1 秒一帧"是战场秒）
             trend.tick(wdt, (int) stats.kills, score, player.hpRatio());
             maybeOpenShop();
+            // 通关出口放在这一段**最后**：波次状态机自己不知道界面存在，VICTORY 是谁把它翻译成
+            // 结算页的，得有个唯一的地方——就是这里，与死亡共用 {@link #settleRun}。
+            // 放在末尾还有一条实际好处：同一步里商店那道边沿先走过（末波 closeWave 直接进
+            // VICTORY、不进 INTERMISSION，所以它本来也不会开），终态不会跟面板抢栈。
+            if (wave.victory()) onVictory();
         }
         particles.stepAndCompact(dt);
         particles.cullOutOfBounds(Screen.LOGIC_W, metrics.logicH, 8);
@@ -1690,18 +1698,39 @@ public final class Game implements GameThread.Host {
 
     private void onPlayerDied() {
         runOver = true;
-        modals.push(ModalStack.RESULT);
-        dropMoveInput();
         shake = 1f;
         sweepFlash = 0.6f;
         spawnBurst(player.x, player.y, 48, Ink.PROBE);
         if (haptics != null) haptics.heavyClick();
-        // 芯片只在**这一条**出口结清：暂停重开是放弃的一局，什么都不留（留了就等于奖励中途重来）
+        settleRun(false);
+    }
+
+    /**
+     * 打完最后一波（#54 的那一支）。**开的是同一条结算链**，只有演出不同：没有机头爆散、
+     * 没有震屏与闪白——那些是"你没了"的语言，挂在"打完了"上面会把终态读成事故。
+     *
+     * <p>芯片结清、落盘、快照三件与死亡**逐字同一段**（{@link #settleRun}），因为它们是"这一局结束"
+     * 的后果，不是"死亡"的后果：通关不该比阵亡少拿一份工资，那样打到底反而是惩罚。
+     */
+    private void onVictory() {
+        runOver = true;
+        if (haptics != null) haptics.heavyClick();
+        settleRun(true);
+    }
+
+    /**
+     * 一局结束的**唯一**结算出口（死亡与通关共用）。放进共用段不是为了少写六行，是因为这六行里
+     * 有一条只在"两条出口都存在"时才会被想起的账：暂停重开什么都不给（留了就等于奖励中途重来），
+     * 所以结清必须挂在终态上而不是挂在死亡上。
+     */
+    private void settleRun(boolean victory) {
+        modals.push(ModalStack.RESULT);
+        dropMoveInput();
         growth.addWallet(chips);
         chips = 0;
         growth.save(store);
         // 结算快照：峰值与时长在打的时候就已经逐帧记进 stats 了，这里不需要再补一次现场读数
-        sheet.fill(stats, score, wave.wave(), wave.wavesCleared(), records, store);
+        sheet.fill(stats, score, wave.wave(), wave.wavesCleared(), victory, records, store);
         resultAtUi = time.ui();
         result.clearPress();
     }
@@ -1718,6 +1747,26 @@ public final class Game implements GameThread.Host {
         // 数值取大到能盖过护盾与 takenMul，但**不绕过任何一道闸**：无敌期按下去没反应是真链的行为，
         // 绕过它就不是取证了（那是造一条玩家看不到的死法）。
         hurtPlayer(9999, true);
+    }
+
+    /**
+     * 真机取证用（{@code EV_DEBUG_VICTORY}，F8）：只做两件事——把波号推到终波、把场上敌人清掉。
+     * 之后的 {@code SPAWN → CLEAR → closeWave → VICTORY}，以及 {@link #step} 末尾那一行发现通关、
+     * {@link #onVictory} 结的账，**全是真的那一条**（道理同 {@link #debugEndRun}：绕过发现路径
+     * 取到的证不成立）。闸门也与它同一条：只问栈顶。
+     *
+     * <p>⚠ 这条键是**我加的**，不是他提的（他给的是"通关结算页不存在需要修"这一句）。加它的理由：
+     * 验收要走到 {@code Balance.wave.maxWave} 那一波，真打是十几二十分钟一个手势都不能停。
+     * 不要的话删三处即可（本方法 ＋ {@code InputRouter.EV_DEBUG_VICTORY} ＋ {@code MainActivity}
+     * 的 F8 分支），产品逻辑一处不动。
+     *
+     * <p>清场走的是池子的整清、不是逐个击杀：这一局的成绩单因此是"打到终波但路上没杀够"，
+     * 版面照常出——要验的是**那一支有没有出口和标记**，不是它的数字好不好看。
+     */
+    private void debugForceVictory() {
+        if (modals.peek() != ModalStack.NONE) return;
+        wave.debugReachFinalWave();
+        enemies.clear();
     }
 
     /** 超载扫描：[规格] 冷却制 30 秒，trigger() 拒绝时不放（不给"读条中途白嫖"）。 */

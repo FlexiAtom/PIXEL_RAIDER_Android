@@ -48,6 +48,11 @@ public final class ResultScreen {
     private static final int[] BTN_ACTION = {ACTION_RETRY, ACTION_MENU};
 
     private static final String L_TITLE = "战绩归零";
+    /**
+     * 打完最后一波那一支的标题（#54）。四个字都验过在内嵌子集里（{@code EmbeddedFontTest} 逐字符查
+     * cmap，改这里必须先跑它）；候选里"告捷""折桂"那类罕字不在子集，画出来是空白方块。
+     */
+    private static final String L_TITLE_VICTORY = "全线贯通";
     private static final String L_SCORE = "分数";
     private static final String L_NEW_RECORD = "新纪录";
     private static final String L_TO_RECORD = "距纪录";
@@ -142,7 +147,7 @@ public final class ResultScreen {
         return PressSelector.NONE;
     }
 
-    /** @param t 死亡起算的界面秒数（规格 §五：暂停不该把入场动画冻在半路） */
+    /** @param t 一局结束（死亡或通关）起算的界面秒数（规格 §五：暂停不该把入场动画冻在半路） */
     public void draw(Canvas c, ResultSheet s, float t) {
         // MASK 的 alpha 位就是遮罩浓度——再 setAlpha(255) 会把它抹成实色，"记得自己死在哪"就没了
         kit.fill.setColor(Ink.MASK);
@@ -151,7 +156,7 @@ public final class ResultScreen {
         c.drawRect(kit.rf, kit.fill);
         kit.fill.setAlpha(255);
 
-        drawTitle(c, t);
+        drawTitle(c, s, t);
         drawDivider(c, t);
         drawScore(c, s, t);
         drawRecord(c, s, t);
@@ -162,16 +167,37 @@ public final class ResultScreen {
         drawButtons(c, t);
     }
 
-    private void drawTitle(Canvas c, float t) {
+    /**
+     * 标题按终态二选一——**这就是那张"通关标记"**（他给的落点是"同一页加通关标记"，不是另开一页）。
+     *
+     * <p>为什么留成静态纯函数而不是 {@code if (s.victory)} 写在 {@code drawTitle} 里：
+     * {@code Game} 与绘制都要 Canvas，单测构造不了；而这一行的**选择**本身是这一件的验收点
+     * （"通关那一支到底有没有被区分出来"）。把选择抽成函数，区分就得证了，画法照旧不测。
+     */
+    static String titleFor(boolean victory) {
+        return victory ? L_TITLE_VICTORY : L_TITLE;
+    }
+
+    /**
+     * 标题与光晕的颜色跟着终态走：「全线贯通」顶着 {@code Md3.error()} 的红，读起来还是"你没了"，
+     * 上面那次换字就白做。通关用 {@code Md3.primary()}——调色板里没有 success 这一档，
+     * MD3 的常规做法就是让正向终态落在 primary 上（不是我自己挑的色，是 token 表的既有语义）。
+     */
+    static int titleToneFor(boolean victory) {
+        return victory ? Md3.primary() : Md3.error();
+    }
+
+    private void drawTitle(Canvas c, ResultSheet s, float t) {
         float p = RevealScript.progressOf(RevealScript.TITLE, t);
         if (p <= 0f) return;
         ResultLayout.titleRect(ra);
         int cy = ra.centerY() - (int) ((1f - Easing.easeOutBack(p)) * TITLE_SLIDE);
         // 规格："发光从 16 降到 5"——砸下来时光晕是散的，落定后只留一圈边
         int extra = Math.round(16f - 11f * p);
-        kit.glowAt(c, GlowAtlas.SHEEN, ra.centerX(), cy, ra.height() + extra * 2, Md3.error(),
+        int tone = titleToneFor(s.victory);
+        kit.glowAt(c, GlowAtlas.SHEEN, ra.centerX(), cy, ra.height() + extra * 2, tone,
                 Math.round(120 * p));
-        kit.bakedCentered(c, L_TITLE, Md3.PX_DISPLAY, Md3.error(),
+        kit.bakedCentered(c, titleFor(s.victory), Md3.PX_DISPLAY, tone,
                 ra.centerX(), cy, Math.round(255 * p));
     }
 

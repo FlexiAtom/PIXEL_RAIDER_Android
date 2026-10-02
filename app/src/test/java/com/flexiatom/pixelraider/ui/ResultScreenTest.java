@@ -44,6 +44,27 @@ public class ResultScreenTest {
         assertEquals(Rating.COUNT, ResultScreen.L_DIM.length);
     }
 
+    /**
+     * 通关与阵亡共用这一页，分开它们的就是标题那一行（他给的落点逐字：「同一页加通关标记」）。
+     *
+     * <p>所以"取哪一行字、上哪个色"必须是**函数**而不是 {@code drawTitle} 里的字面量：绘制要
+     * Canvas 测不了，选择测得了。三组判据各有理由——文案不许相同（相同就等于标记没加）；
+     * 字数必须相同（标题是居中画的，差一字两种终局的版面就错半格，看着像两个页面）；
+     * 色必须不同且各归各的 token（「全线贯通」顶着 {@code Md3.error()} 的红，读起来还是死讯，
+     * 那字就白换了）。
+     */
+    @Test
+    public void victoryAndDeathGetDifferentTitlesAndTones() {
+        String dead = ResultScreen.titleFor(false);
+        String won = ResultScreen.titleFor(true);
+        assertNotEquals("两种终态同题 ⇒ 通关标记等于没加", dead, won);
+        assertEquals(dead.length(), won.length());
+        assertEquals(4, won.length());
+        assertNotEquals(ResultScreen.titleToneFor(false), ResultScreen.titleToneFor(true));
+        assertEquals(Md3.error(), ResultScreen.titleToneFor(false));
+        assertEquals(Md3.primary(), ResultScreen.titleToneFor(true));
+    }
+
     @Test
     public void labelsFitTheLabelColumnAndDoNotCollide() {
         // 五维标签要和条体同列：LABEL_W = 16 = 两个 8px 汉字，第三个字就会骑到条上

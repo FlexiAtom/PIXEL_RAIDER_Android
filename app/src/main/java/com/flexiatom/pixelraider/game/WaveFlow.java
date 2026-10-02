@@ -78,6 +78,28 @@ public final class WaveFlow {
     }
 
     /**
+     * 真机取证用（{@code EV_DEBUG_VICTORY}，只在 debug 包被 {@code MainActivity} 放行）：
+     * 把波号推到终波并**清空待刷队列**，剩下的交给真的那条路——空队列使下一帧
+     * {@link #spawnStep} 翻 {@code CLEAR}，场上又没敌人，于是 {@link #closeWave} 自己走到
+     * {@code VICTORY}。相位不是这里直接写的。
+     *
+     * <p>为什么不干脆让调用方写 {@code phase = VICTORY}，或干脆去调 {@code Game.onVictory()}：
+     * #54 抱怨的是**通关出口没接**，取证必须让"发现通关"的那一条（{@code Game.step} 读
+     * {@link #victory()}）真的跑一遍。绕过发现路径去画那张脸，取到的证不成立——
+     * 与 {@code Game.debugEndRun} 复用真伤害链是同一条道理。
+     *
+     * <p>波号也推到 {@code maxWave} 是因为页面上"到达波次"那一行要得的是终波的数，
+     * 半途的读数会让取证照片看起来像另一局。
+     */
+    public void debugReachFinalWave() {
+        wave = Balance.wave.maxWave;
+        kindCount = 0;
+        cursor = 0;
+        gapLeft = 0f;
+        phase = SPAWN;
+    }
+
+    /**
      * 每帧一次。
      *
      * @param dt         世界步长（hit-stop 期间由调用方缩减，本类不关心）

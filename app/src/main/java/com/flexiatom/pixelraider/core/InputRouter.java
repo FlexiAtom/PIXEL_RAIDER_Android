@@ -39,6 +39,8 @@ public final class InputRouter {
     public static final int EV_PAUSE = 9;
     /** 仅 debug 包：作弊键，让真机取证不必靠打满一局才能看见结算链。 */
     public static final int EV_DEBUG_KILL = 10;
+    /** 真机取证用（F8）：把波次推到终波并让**真的**那套清场→通关流程走完（见 {@code Game.debugForceVictory}）。 */
+    public static final int EV_DEBUG_VICTORY = 11;
     /** 事件无效槽位标记。 */
     public static final int EV_NONE = 0;
 
