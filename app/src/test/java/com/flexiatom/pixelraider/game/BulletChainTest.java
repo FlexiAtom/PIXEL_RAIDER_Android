@@ -452,13 +452,62 @@ public class BulletChainTest {
             }
             int made = pool.activeCount() - seen;
             assertTrue("第 " + slot + " 档没发出来", made > 0);
+            // 短档居中 ⇒ 那 made 列是从 (columns − made)/2 往上数的连续列，不是从 0 号列开始
+            int start = (c.columns() - made) / 2;
             for (int j = 0; j < made; j++) {
                 assertEquals("第 " + slot + " 档第 " + j + " 列的出膛点 = 当帧机头 + 列偏移",
-                        noses[slot] + c.columnOffset(j), pool.activeAt(seen + j).x, EPS);
+                        noses[slot] + c.columnOffset(start + j), pool.activeAt(seen + j).x, EPS);
             }
             seen += made;
         }
         assertEquals(17, seen);
+    }
+
+    /**
+     * 末尾那个<b>短档</b>落在中间那一列，不是从 0 号列开始。
+     *
+     * <p>9 发铺 8 列 ⇒ 第二档只剩 1 发。从 0 号列开始的话它就是扇面**最外左**那一列
+     * （偏移 −3.5 格、张角吃满 −22°），屏幕上看着像"偶尔歪着打一发"，而不是"这一次还剩一发"。
+     * 判据取"离瞄准线不超过半格（= 一个弹宽）"，并与同一代满档里最外那一列对照——
+     * 两个量差七倍，不会被一句"差不多居中"糊过去。张角用 vx 对照，因为它没有独立字段可读。
+     */
+    @Test
+    public void theShortRowIsCenteredNotLeftBiased() {
+        Balance.Weapon shot = Balance.weapons[Balance.Weapon.SHOT];
+        BulletChain c = new BulletChain();
+        c.layout(shot, 9, shot.fireGap);              // C=18 ⇒ 横向主导 ⇒ 8 列 2 档 [8,1]
+        assertEquals(8, c.columns());
+        assertEquals(2, c.slots());
+        assertEquals(8, c.pelletsAt(0));
+        assertEquals(1, c.pelletsAt(1));
+
+        BulletPool pool = new BulletPool(16);
+        c.beginGeneration(template(shot));
+        int seen = 0;
+        float outerDx = 0f;
+        float outerVx = 0f;
+        for (int slot = 0; slot < c.slots(); slot++) {
+            for (int f = 0; f < 20 && pool.activeCount() == seen; f++) {
+                c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null);
+            }
+            int made = pool.activeCount() - seen;
+            assertEquals("第 " + slot + " 档的发数", c.pelletsAt(slot), made);
+            if (slot == 0) {                          // 满档从 0 号列开始，最外左就是它的第一发
+                outerDx = pool.activeAt(0).x - NOSE_X;
+                outerVx = pool.activeAt(0).vx;
+            } else {
+                float dx = pool.activeAt(seen).x - NOSE_X;
+                assertTrue("短档该居中：|Δx| ≤ 半格 " + shot.size + "，实得 " + dx,
+                        Math.abs(dx) <= shot.size + 1e-4f);
+                assertTrue("短档明明打在最外左列（Δx " + dx + " 对比最外 " + outerDx + "）",
+                        Math.abs(dx) < Math.abs(outerDx));
+                assertTrue("短档的张角也该回到中段（vx " + pool.activeAt(seen).vx
+                                + " 对比最外 " + outerVx + "）",
+                        Math.abs(pool.activeAt(seen).vx) < Math.abs(outerVx));
+            }
+            seen += made;
+        }
+        assertEquals(9, seen);
     }
 
     /** 一代内部只 roll 一次暴击：整代的 crit 标志与伤害必须完全相同。 */

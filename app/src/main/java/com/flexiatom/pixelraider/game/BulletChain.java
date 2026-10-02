@@ -44,6 +44,7 @@ import com.flexiatom.pixelraider.core.Time;
  * used        = ceil(N / columns)                 ← 本代真正占用的时隙数
  * base = N / columns,  rem = N % columns
  * 第 k 时隙发数 = (k &lt; base) ? columns : rem     ← 前 base 个时隙各满列，末尾剩 rem
+ *               （那 rem 发占哪几列：居中，见 {@link #step}）
  * 闭合：base·columns + rem = N                   ← 发数永不丢，这条由测试钉住
  * </pre>
  *
@@ -110,8 +111,13 @@ import com.flexiatom.pixelraider.core.Time;
  * 两列看起来仍是一条带，正是 #55 的另一半病因。
  * ⇒ 单列武器恒为正上方一条链；多列武器既横向排开又按本武器张角张开。
  *
- * 布局只在**购买 / 换枪 / 有效冷却变化**时算一次（{@link #matches} 是三条浮点/整型比较），
- * 开火路径与每帧路径上**没有除法**。
+ * 末尾那个<b>短档</b>（{@code rem} 发那一次）在 {@link #step} 里**按列号居中**，不是从 0 号列开始：
+ * 不居中的话 N=9 的第二次齐射就是一发孤零零打在扇面最外左列，看着像 bug 而不是"还剩一发"。
+ * 居中之后它落在最中间那一（或两）列上，张角也一并回到接近 0——短档读起来是"收窄的同一次齐射"。
+ *
+ * 布局只在**购买 / 换枪 / 有效冷却变化**时算一次（{@link #matches} 是三条浮点/整型比较）。
+ * 每帧路径上只有比较与加法；两次整型除法只出现在**时隙真的到点**的那一帧（窗口起点与发数），
+ * 而绝大多数帧根本走不到那里。
  */
 public final class BulletChain {
 
@@ -334,9 +340,11 @@ public final class BulletChain {
         while (next < slots && acc >= interval) {
             acc -= interval;
             int n = pelletsAt[next++];
-            for (int c = 0; c < n; c++) {
-                float x = noseX + colOffset[c];
-                float deg = colAngle[c];
+            int start = (columns - n) / 2;        // 短档居中；n ≤ columns，故 start+n-1 恒不越列
+            for (int i = 0; i < n; i++) {
+                int col = start + i;
+                float x = noseX + colOffset[col];
+                float deg = colAngle[col];
                 if (tpl.guided) WeaponFire.fireMissile(missiles, tpl, x, noseY, deg);
                 else WeaponFire.fireOne(pool, tpl, x, noseY, deg);
                 made++;
