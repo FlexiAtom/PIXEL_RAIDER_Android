@@ -173,6 +173,8 @@ public final class ShopRules {
             // ⚠ 这里的 0 与 default 那一路**撞不出来**：default 也返回 0f。它必须显式写，是因为
             // coreKind 那一路要给这张卡挑「解锁」而不是「立即就绪」，而那张卡有没有数就看在不在这一格里。
             case Balance.ShopCard.ROD: return 0f;
+            // 雷达锁定同形：它买的是"一块屏在不在 + 那一锁听不听指定"，表上没有一个可加的数。
+            case Balance.ShopCard.RADAR: return 0f;
             default: return 0f;
         }
     }
@@ -208,6 +210,8 @@ public final class ShopRules {
             // 连续杆：买断一级（同中段引导）。这一格**不写就会安静地坏**——default 是 UNLIMITED，
             // 表现是买过之后它永远留在货架上，而一张没有第二级可买的卡反复上架就是假商品。
             case Balance.ShopCard.ROD: return k.rodMaxLevel;
+            // 雷达锁定同族：default 是 UNLIMITED，漏这一格就是"买过一次之后永远上架"的假商品。
+            case Balance.ShopCard.RADAR: return k.radarMaxLevel;
             default: return UNLIMITED;
         }
     }
@@ -235,6 +239,8 @@ public final class ShopRules {
             // 连续杆同族：买断的是"这一发炸不炸成一片"，没有累计等级可画（default 是 true，
             // 漏这一格就会在卡角印出「Lv 0」——那张卡买过一次就下架，那行字永远是废话）。
             case Balance.ShopCard.ROD:
+            // 雷达锁定同族：买断的是"那块屏在不在"，只有买过/没买过两态。
+            case Balance.ShopCard.RADAR:
                 // 中段引导与格斗导弹都是买断：只有"买过/没买过"两态，而买过之后这张卡就下架了，
                 // 所以「Lv 0」是它唯一会上屏的一行废话——判据仍是那条"收益随不随累计等级变多"。
                 return false;
@@ -308,6 +314,9 @@ public final class ShopRules {
             // 连续杆（2026-10-02）也在闸门之后：它改的是**弹体炸开那一下**，没有导弹这一把时
             // 场上没有任何一发会走到那条路，买下去数值层没变、画面层也没变。
             case Balance.ShopCard.ROD:
+            // 雷达锁定走同一道闸门（2026-10-03）：它指定的是**普通弹那一锁**的目标，
+            // 手上没有导弹这条流时，那块屏画出来也点不出任何后果——卖一件场上不存在的机制就是假商品。
+            case Balance.ShopCard.RADAR:
                 return s.levelOf(Balance.ShopCard.BASIC_MISSILE) > 0;
             default: return true;
         }
@@ -577,6 +586,9 @@ public final class ShopRules {
             // 连续杆也走这一格：default 会印「立即就绪」，而这卡买的是一条**常驻**的战斗部规则，
             // 没有"立即"也没有"数"。
             case Balance.ShopCard.ROD:
+            // 雷达锁定同族（2026-10-03）：买断的是"那块屏在不在 + 那一锁听不听指定"，
+            // 既不是数也不是立即，卡面只剩「解锁」可印。
+            case Balance.ShopCard.RADAR:
                 return CORE_UNLOCK;                // 买断一个机制，卡面只说"解锁"
             case Balance.ShopCard.IGNITION:
                 return CORE_PX;                    // 每级加长的是导引头半径（px）

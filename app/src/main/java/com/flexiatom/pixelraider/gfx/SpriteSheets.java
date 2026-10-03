@@ -88,6 +88,8 @@ public final class SpriteSheets {
      * 若另起形状（又一条弯弹道、又一个扇形），它会与簇 II 那三张撞成同一句话。
      */
     public static final int ID_SHOP_ROD = 32;
+    /** 雷达锁定（2026-10-03 落地：这张卡**从来没有落地过**，今天卡表里只有它的升级卡「中段引导」）。 */
+    public static final int ID_SHOP_RADAR = 33;
 
     /** 玩家机：11×11，机头朝上（朝向由实际位移旋转绘制，不在网格里画四个方向）。 */
     public static final String[] SHIP = {
@@ -523,6 +525,26 @@ public final class SpriteSheets {
     };
 
     /**
+     * 雷达锁定：一圈环 + 中心机位 + 一条斜向扫描线 + 一枚离心的目标点。
+     *
+     * <p>形状为什么是"环里一个点"而不是又一个扇形：这张卡卖的是**看得见战场并且点得着**（他 2026-10-03
+     * 逐字「块屏是雷达锁定那张卡的商品（因为无锁定时雷达屏幕没用）」），而扇形在本表里已经被
+     * {@link #SHOP_HAND}（张角）与 {@link #SHOP_IGN}（半径）各占了一次——第三次画扇形就是三张同一句话。
+     * 环＋点是这块 HUD 方块最省的缩略写法。
+     */
+    public static final String[] SHOP_RADAR = {
+            ".........",
+            "..00000..",
+            ".0....40.",
+            "0....4..0",
+            "0...4...0",
+            "0.......0",
+            "0.4.....0",
+            ".0.....0.",
+            "..00000..",
+    };
+
+    /**
      * 按**玩法枚举的序号**索引的网格表：小怪读 {@code Balance.Enemy.STRAIGHT..BURSTER}、
      * Boss 读 {@code Balance.Boss.DESTROYER..FORTRESS}、掉落读 {@code Drops.CHIP..BOMB}。
      *
@@ -560,14 +582,14 @@ public final class SpriteSheets {
             DROP_HP, DROP_SHIELD, DROP_BOMB, DROP_POWERUP, SHOP_MAGNET, DROP_COIN,
             SHOP_RANDOM,
             SHOP_MID, SHOP_IGN, SHOP_HAND, SHOP_DOG,
-            SHOP_MISSILE, SHOP_BEAM, SHOP_ROD,
+            SHOP_MISSILE, SHOP_BEAM, SHOP_ROD, SHOP_RADAR,
     };
     public static final int[] SHOP_ICON_IDS = {
             ID_SHOP_FIRE, ID_SHOP_RATE, ID_SHOP_CRIT, ID_SHOP_SPEED, ID_SHOP_HULL,
             ID_HP, ID_SHIELD, ID_BOMB, ID_POWERUP, ID_SHOP_MAGNET, ID_COIN,
             ID_SHOP_RANDOM,
             ID_SHOP_MID, ID_SHOP_IGN, ID_SHOP_HAND, ID_SHOP_DOG,
-            ID_SHOP_MISSILE, ID_SHOP_BEAM, ID_SHOP_ROD,
+            ID_SHOP_MISSILE, ID_SHOP_BEAM, ID_SHOP_ROD, ID_SHOP_RADAR,
     };
 
     public static int widthOf(String[] rows) {

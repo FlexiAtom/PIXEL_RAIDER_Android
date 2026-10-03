@@ -47,6 +47,8 @@ public final class PauseScreen {
     public static final int ACTION_MENU = 4;
     /** 暂停页里的商店入口（B3）。码值排在既有四个之后：{@code Game} 用 if-else 链比它，不与任何码相撞。 */
     public static final int ACTION_SHOP = 5;
+    /** 暂停页里的调试入口（仅 debug 构建受理）。排在商店之后，同样不与任何码相撞。 */
+    public static final int ACTION_DEBUG = 6;
     /** 换 tab 在面板内部就地生效，从不报给调用方，所以这里**没有** ACTION_TAB。 */
 
     /**
@@ -59,6 +61,13 @@ public final class PauseScreen {
     static final boolean SETTINGS_LIVE = false;
     static final boolean MENU_LIVE = true;      // 2026-09-29 授权摘灰：宿主 openMenu 已在，动作分支同批接上
     static final boolean SHOP_LIVE = true;      // 商店本体在 B1/B2，这一枚是它的暂停页入口
+    /**
+     * 调试入口的静态默认：{@code false}。它**不是**这一格最终的生死——真值在 {@link #debugBuild}
+     * 上（由 {@link #layout} 从 {@code Game} 传入）。这里留 false 只为让静态契约测试
+     * （{@code PauseScreenTest}）在没有运行期标志的类加载阶段也把「调试」判为"不亮"，从而不逼它
+     * 携带真动作。{@link #isLive} 才是绘制与命中的实际判据：{@code debugBuild} 为真时这一格才活。
+     */
+    static final boolean DEBUG_LIVE = false;
 
     private static final String L_TITLE = "作战暂停";
     private static final String L_SAMPLING = "采样中…";
@@ -67,6 +76,7 @@ public final class PauseScreen {
     private static final String L_SHOP = "升级商店";
     private static final String L_ACHIEVEMENTS = "成就";
     private static final String L_SETTINGS = "设置";
+    private static final String L_DEBUG = "调试";
     private static final String L_RESTART = "重开本局";
     private static final String L_MENU = "返回主菜单";
     /**
@@ -87,25 +97,30 @@ public final class PauseScreen {
     private final PauseLayout box = new PauseLayout();
     private final HudText hud = new HudText(32);
     private final RectI[] tabHit = {new RectI(), new RectI(), new RectI()};
-    /** 六枚出口的**外扩命中框**（48dp 标准），下标对齐 {@link #EXIT_ACTION}。同时是按压区的判定框。 */
+    /** 出口的**外扩命中框**（48dp 标准），下标对齐 {@link #EXIT_ACTION}。同时是按压区的判定框。调试格排在末位（6）。 */
     private final RectI[] exitHit = {
-            new RectI(), new RectI(), new RectI(), new RectI(), new RectI(), new RectI()
+            new RectI(), new RectI(), new RectI(), new RectI(), new RectI(), new RectI(), new RectI()
     };
     private final PressSelector press = new PressSelector();
     /** 包内可见只为测试（{@code PauseScreenTest} 钉它与 {@link #EXIT_LIVE} 的下标对应）；对外仍然只报动作码。 */
     static final int[] EXIT_ACTION =
-            {ACTION_RESUME, ACTION_SHOP, ACTION_NONE, ACTION_SETTINGS, ACTION_RESTART, ACTION_MENU};
-    /** 每枚出口属于第几级（第二行那三枚同属一级，规格 §四 的级联按**行**延后，不按枚）。 */
-    private static final int[] EXIT_LEVEL = {0, 1, 1, 1, 2, 2};
+            {ACTION_RESUME, ACTION_SHOP, ACTION_NONE, ACTION_SETTINGS, ACTION_RESTART, ACTION_MENU,
+                    ACTION_DEBUG};
+    /** 每枚出口属于第几级（第二行那几枚同属一级，规格 §四 的级联按**行**延后，不按枚）。调试在第二行＝1。 */
+    private static final int[] EXIT_LEVEL = {0, 1, 1, 1, 2, 2, 1};
     /**
      * 未落地的出口在这里就整条剔除（既不响应也不淡入）。成就属 S5、设置属 S4-c 第三段——
      * 落地一个就把对应布尔翻成 true，并给 {@link #EXIT_ACTION} 那格真动作。
      * 这最后一句是契约，不是建议：{@code PauseScreenTest} 现在钉着"亮着的出口必须带真动作"。
+     * 调试那一格写的是静态 {@link #DEBUG_LIVE}（默认 false）；运行期它随 {@link #debugBuild} 走，
+     * 判据在 {@link #isLive}，不在这里。
      */
     static final boolean[] EXIT_LIVE =
-            {true, SHOP_LIVE, ACHIEVEMENTS_LIVE, SETTINGS_LIVE, true, MENU_LIVE};
+            {true, SHOP_LIVE, ACHIEVEMENTS_LIVE, SETTINGS_LIVE, true, MENU_LIVE, DEBUG_LIVE};
     private int canvasH = Screen.BATTLE_H;
     private int tab = TrendSampler.TAB_KILLS;
+    /** 是否 debug 构建（由 {@link #layout} 传入）：决定第二行摆三格还是四格、以及调试那格活不活。 */
+    private boolean debugBuild;
 
     public PauseScreen(BitmapFont font, TextCache text, GlowAtlas glow) {
         kit = new DrawKit(font, text, glow);
@@ -115,9 +130,10 @@ public final class PauseScreen {
         return tab;
     }
 
-    public void layout(int logicH, int safeTop, int safeBottom, int minTouchLogic) {
+    public void layout(int logicH, int safeTop, int safeBottom, int minTouchLogic, boolean debugBuild) {
         canvasH = logicH <= 0 ? Screen.BATTLE_H : logicH;
-        box.layout(canvasH, safeTop, safeBottom);
+        this.debugBuild = debugBuild;
+        box.layout(canvasH, safeTop, safeBottom, debugBuild);
         for (int i = 0; i < tabHit.length; i++) {
             Widgets.hitRect(box.tabs[i], minTouchLogic, tabHit[i]);
         }
@@ -173,6 +189,7 @@ public final class PauseScreen {
     /**
      * 第 i 枚出口的**绘制框**——直接引用 {@link #box} 里的实例，不复制，免得两份真值。
      * 公开只为测试：按压态画在哪个框上、重叠断言量哪几个矩形，都得到这儿取。
+     * 下标 6 = 调试格（正式包里 {@code box.debug} 是空矩形，画不出、也命中不到）。
      */
     public RectI drawn(int i) {
         switch (i) {
@@ -181,8 +198,18 @@ public final class PauseScreen {
             case 2: return box.achievements;
             case 3: return box.settings;
             case 4: return box.restart;
-            default: return box.menu;
+            case 5: return box.menu;
+            default: return box.debug;
         }
+    }
+
+    /**
+     * 这一格现在活不活：静态表里写 true 的就活（成就/设置/商店/菜单那几个），调试格额外看
+     * {@link #debugBuild}——{@link #EXIT_LIVE} 里它恒记 false（让静态契约测试认它"不亮"），
+     * 真正的生死在这个运行期判据里。绘制与命中都走这一个函数，两处不会脱节。
+     */
+    private boolean isLive(int i) {
+        return EXIT_LIVE[i] || (i == EXIT_ACTION.length - 1 && debugBuild);
     }
 
     /**
@@ -197,7 +224,7 @@ public final class PauseScreen {
     private int exitUnder(int x, int y, float elapsed) {
         for (int pass = 0; pass < 2; pass++) {
             for (int i = 0; i < EXIT_LIVE.length; i++) {
-                if (!EXIT_LIVE[i] || PanelMotion.buttonProgress(EXIT_LEVEL[i], elapsed) < 1f) {
+                if (!isLive(i) || PanelMotion.buttonProgress(EXIT_LEVEL[i], elapsed) < 1f) {
                     continue;
                 }
                 if ((pass == 0 ? drawn(i) : exitHit[i]).contains(x, y)) {
@@ -388,6 +415,11 @@ public final class PauseScreen {
                 PanelMotion.buttonProgress(2, elapsed), true, false, on == 4);
         drawFlatButton(c, box.menu, L_MENU,
                 PanelMotion.buttonProgress(2, elapsed), MENU_LIVE, true, on == 5);
+        // 调试格只在 debug 构建画：正式包里 box.debug 是空矩形、这一路整体跳过，第二行还是三格。
+        if (debugBuild) {
+            drawFlatButton(c, box.debug, L_DEBUG,
+                    PanelMotion.buttonProgress(1, elapsed), true, false, on == 6);
+        }
     }
 
     /**

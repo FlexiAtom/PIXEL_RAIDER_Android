@@ -33,6 +33,8 @@ public final class ModalStack {
     public static final int CODEX = 6;
     /** 成长页（局外成长树的消费面板），从主菜单进。栈容量 8 是**深度**，与这里的编号不是一回事。 */
     public static final int GROWTH = 7;
+    /** 调试页（仅 debug 构建可见），从暂停页进。叠在 PAUSE 之上——关掉它战场还冻在原地，与商店同款。 */
+    public static final int DEBUG = 8;
 
     private final int[] stack = new int[8];
     private int size;

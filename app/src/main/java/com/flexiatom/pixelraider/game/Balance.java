@@ -52,6 +52,8 @@ public final class Balance {
     public static final Grade grade = new Grade();
     public static final Growth growth = new Growth();
     public static final Shop shop = new Shop();
+    /** HUD 那块雷达屏的仪表色与取样参数（不是 MD3 token，见 {@link Radar} 的类注释）。 */
+    public static final Radar radar = new Radar();
     public static final ShopCard[] shopCards = ShopCard.makeAll();
     public static final Enemy[] enemies = Enemy.makeAll();
     public static final Boss[] bosses = Boss.makeAll();
@@ -776,7 +778,7 @@ public final class Balance {
          * 它没有 switch 会被遍历到，漏登记的表现是"卡买了、货架上下架了、武器却仍然切不进去"——
          * 每一层单独看都自洽，所以他实测报的那条（「格斗导弹购买后无效果」）就是这么来的。
          */
-        public static final int CARDS = 19;
+        public static final int CARDS = 20;
         public static final int OFFER = 3;
         /**
          * 回合结束那个商店的价格乘子（I-3）。
@@ -868,6 +870,11 @@ public final class Balance {
          */
         public int midCourseMaxLevel = 1;
         /**
+         * 「雷达锁定」的档数：**1**——与「中段引导」「连续杆」同族，买断的是**一块屏加上"能指定"这件事**，
+         * 不是量，所以没有第二级可叠（{@code ShopRules.isValid} 的满级闸门据此把它摘下架）。
+         */
+        public int radarMaxLevel = 1;
+        /**
          * 二次点火每级给**导引头扇形半径**加的量（逻辑像素），档数 3 ⇒ 50 → 125。
          *
          * <p>两张卡各领一条边的分配**是他的**（2026-09-30 直发，逐字「seekerRange 125px／圆心角 84°
@@ -914,9 +921,12 @@ public final class Balance {
          * 不是一种可解释的商品），各写一个 {@code = 1} 只会多出一次"改了其中一张忘了另一张"。
          *
          * <p>入池依据是他的逐字（2026-10-02）「商店新增『基础导弹』和『基础激光』」——这句话补的是
-         * **获取途径**那一半：{@link Balance#weapons} 里那六把从来没有哪一处卖过，触屏又没有
-         * 切枪入口，于是 {@code Game} 里那条 {@code dogfightOn() && player.weapon().guided}
+         * **获取途径**那一半：{@link Balance#weapons} 里那六把**当时**从来没有哪一处卖过，触屏又没有
+         * 切枪入口，于是 {@code Game} 里那条**当时的**闸门 {@code dogfightOn() && guided}
          * 在读表上恒假，「格斗导弹」买下去场上纹丝不动（他实测报的正是这条）。
+         * 今天那条闸门是 {@code dogfightOn() && (guided || debugPulseDogfight)}：后半那枚是**调试包**
+         * 专用的观测口（让脉冲枪也能逼出格斗弹好目视确认，入口在暂停页的调试格），不是第三条获取
+         * 途径——别把它读成"制导那把终于能买了"，能买靠的是上面这两张卡。
          */
         public int weaponUnlockMaxLevel = 1;
         /**
@@ -951,6 +961,44 @@ public final class Balance {
      * {@code ShopRules.perLevelOf/maxLevelOf} 按 id 现读。两处各存一份的话，热调一档数值
      * 就会让卡面写 +2%、实际结算 +3%——那是规格点名的"显示与结算不一致"这一类 bug。
      */
+    /**
+     * HUD 那块雷达屏的仪表参数与配色。
+     *
+     * <p><b>颜色集中在这一格</b>，是他的原话逼出来的：「你先自定一个绿，后续我会给颜色代码」
+     * ⇒ 代码颜色只许改这一处，绘制端一个色值都不许出现（否则"整块换色"会变成一次全仓搜索）。
+     *
+     * <p>⚠ 这一组**不进 {@code ui.Md3}**：Md3 装的是面板层语义 token（表面色 / 主色 / 容器），
+     * 换皮时要跟着主题走；这块屏是**仪表读数色**，主题换了它也不该换。
+     */
+    public static final class Radar {
+        /** 底色：#00E676 压到 18% alpha。半透明不是装饰——HUD 整块**盖在战场上**（{@code battleTop} 与 {@code hudTop} 是同一个数）。 */
+        public int baseColor = 0x2E00E676;
+        /** 网格线：同色 30%（「带有网格」那句）。 */
+        public int gridColor = 0x4D00E676;
+        /** 边框：同色 50%。 */
+        public int borderColor = 0x8000E676;
+        /** 敌点：**黄**（用户 2026-10-03 逐字「敌点建议用黄色」，把我原拟的红点换掉了）。 */
+        public int enemyColor = 0xFFFFEB3B;
+        /**
+         * 被指定那一只的方括号：白。
+         *
+         * <p>⚠ 这一格与 {@link #enemyColor} 的分工是那次换色**逼出来的连带再裁**：选中态原本靠
+         * "把那只的点也画成黄的、再加括号"，敌点整体转黄之后点色不可分 ⇒ 选中态改由**括号这个形状**
+         * 承载，点色一律不动。形状比颜色抗混淆，也更经得起他后面再换色。
+         */
+        public int designatedColor = 0xFFFFFFFF;
+        /** 玩家自机：白色实心三角，只给位置不给朝向（机头恒定朝上那条决策在 {@code Game.drawPlayer}）。 */
+        public int shipColor = 0xFFFFFFFF;
+        /** 每边几格（正方形所以横竖同数）。 */
+        public int gridCells = 4;
+        /** 敌点半径，**雷达本地**逻辑像素（不是战场像素）。 */
+        public float dotRadius = 2f;
+        /** 点选容差，雷达本地逻辑像素：容差内取最近的那个点。 */
+        public float hitTolerance = 8f;
+        /** 选中方括号每条边的长度，雷达本地逻辑像素。 */
+        public float bracketLen = 6f;
+    }
+
     public static final class ShopCard {
         public static final int FIREPOWER = 0, TRIGGER = 1, PRECISION = 2, THRUSTS = 3, HULL = 4,
                 REPAIR = 5, SHIELD = 6, SALVO = 7, SURGE = 8, MAGNET = 9, GREED = 10, RANDOM = 11,
@@ -966,7 +1014,11 @@ public final class Balance {
                 BASIC_MISSILE = 16, BASIC_LASER = 17,
                 // 簇 II 第五件（2026-10-02，他逐字裁「新增『连续杆』卡，未买靠撞击」）。这张说的是
                 // 导弹的**战斗部**，不是又一条弹道参数：它改的是"这一发炸开算几只"，不是"更疼"。
-                ROD = 18;
+                ROD = 18,
+                // 「雷达锁定」（2026-10-03）。池件里那条旧格说的就是它，而它**从来没有落地**——
+                // 卡表今天只有它的升级卡 {@link #MID_COURSE}（那张的注释逐字自称"替身"）。
+                // 他这一轮把 HUD 那块雷达屏判成了这张卡的商品 ⇒ 前置卡必须一起建出来。
+                RADAR = 19;
 
         public final int id;
         public final String name;
@@ -1130,19 +1182,31 @@ public final class Balance {
                         // 那两条与池件 §30.6。
                         com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_HAND, 45, 18),
                 new ShopCard(DOGFIGHT, "格斗导弹",
-                        "近处敌机自动锁定并发射",
-                        "机头前那条扇形里只要还有没被锁住的敌机，就自动发射一枚格斗弹；一枚锁一只，"
-                                + "目标死了它就自爆。",
+                        "切到导弹枪，近处敌机自动发射",
+                        "前提是手上这把是导弹枪（切枪键在底部）：这一把端着的时候，机头前那条扇形里"
+                                + "只要还有没被锁住的敌机，就自动发射一枚格斗弹；一枚锁一只，目标死了它"
+                                + "当场自毁——买了「连续杆」那一张，这一毁照样展开亮线，没买则不掉血。",
                         // 簇 II 第四件。清单是他的（L36568 逐字「僚机确定为公共支，新增格斗导弹作为替代」），
                         // **价格与文案全是我定的**——他逐字给的只有「簇 II 四件商品 name/tip 与价格
                         // 你自定即可」。90/0 的判据：它是这张表新的价冠（旧冠「中段引导」70/0），
                         // 高过那一张的理由是它买断之后**多一流弹、多一条独立弹体池**，
                         // 而中段引导只是给已有的弹补上"闭眼段也转向"。买断一级、无等级可叠，
                         // 与 {@code midCourseMaxLevel} 同一形状。
+                        // tip 这次改写是他 2026-10-03 裁的 A 项（「A 改 tip」，不是改判据）：发射闸门
+                        // 要求**手持**制导那把（{@code Game.stepMissiles} 里那条 `player.weapon().guided`），
+                        // 而旧那句「近处敌机自动锁定并发射」只说了自动、没说前提——他实测"买了没效果"
+                        // 那一层修好之后，读不出这一半的卡面仍在把同一句话复述成 bug。15 字是卡面文字列
+                        // 181px 的上限（{@code ShopLayoutTest.textColumnIsWideEnoughForTheLongestTip}），
+                        // 这句压到 14 字留一格余量。⚠ 调试包那枚「脉冲也能出格斗弹」的观测口**不写进卡面**：
+                        // 正式包里它恒假，写上去等于把开发工具卖成玩法。
                         // ⚠ desc 里不写「半径50、夹角60度」那两个数：它们是**场上判据**，写进卡面文案
                         // 就成了第二份读数（数值一改，卡面先说谎）。真正的钉在 {@code MissileBehaviorTest}。
-                        // ⚠ 「自爆」两个字在这里是**玩法词**（脱锁即展开战斗部，L37108），与
-                        // {@code Burster} 那类"自爆怪"是两个东西；两侧共用一个词根的这条撞名如实登记。
+                        // ⚠ 「自爆」在这里是**玩法词**（脱锁即收场，L37108），与 {@code Burster} 那类
+                        // "自爆怪"是两个东西；两侧共用一个词根的这条撞名如实登记。desc 这次改口写「自毁」：
+                        // 战斗部改由「连续杆」卡给出之后（caec131），脱锁那一毁**没有杆就不掉血**
+                        // （{@code WarheadRules.detonationRoute}：`rodOwned ? ROD : fusedSlot>=0 ? IMPACT : NONE`，
+                        // 自毁这条路 fusedSlot 恒 -1）⇒ 旧那句"它就自爆"今天会把"照样炸出一片"读成默认，
+                        // 而那正是没买连续杆的人不会看到的事。
                         com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_DOG, 90, 0),
                 new ShopCard(BASIC_MISSILE, "基础导弹",
                         "解锁导弹，切枪键里会有它",
@@ -1183,6 +1247,26 @@ public final class Balance {
                         // ⚠ 卡面那句「没买则只撞在一只身上」是有后果的：不写它，货架上这张卡读起来
                         // 像"不买就没伤害"，那是假话；写了，未买弹体的单体伤害就是卡面承诺的一部分。
                         com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_ROD, 65, 0),
+                new ShopCard(RADAR, "雷达锁定",
+                        "绿屏点谁，普通弹先打谁",
+                        "HUD 右上开出一块雷达屏：半透明绿底加网格，点一下屏上的敌点就把它指定成目标。"
+                                + "普通弹发射前那一锁不受机头雷达锥的限制——屏上点得着就打得到；"
+                                + "飞起来之后照常导引，指定的那只死了就清空。格斗弹不读这个指定。",
+                        // ⚠ 这一句原来写的是「敌点是黄的」，被 EmbeddedFontTest 打回来了：**内嵌点阵子集里没有
+                        // 「黄」这个字**。补字要重切 assets/fonts/pr-cjk-12px.otf（那是带工具的离线动作，
+                        // 不该由一次文案改动顺带触发），所以这里改成不提颜色。敌点照样是黄的
+                        // （{@link Radar#enemyColor}，他逐字「敌点建议用黄色」），只是卡面不写这个字。
+                        // 2026-10-03 他的七条逐字里这条最贵：「块屏是雷达锁定那张卡的商品（因为无锁定时
+                        // 雷达屏幕没用）」。而「雷达锁定」这张卡**从来没落地过**（本文件里「中段引导」那条
+                        // 注释早就自证过：卡表里从来没有它，只有它的升级卡在替它占位）⇒ 这一格是把欠的
+                        // 前置卡补上，不是新发明一个商品。**tip/desc 措辞、价格与图标形状全是我定的**。
+                        // 66/0 的判据：它必须**低于**自己那张升级卡「中段引导」70，否则"升级更贵"这条序反了；
+                        // 又要**高于**归还旧机制的「连续杆」65，因为这块屏是本仓第一个由玩家指定目标的机制。
+                        // 与 65 只差 5 是刻意的：这两张都是"买断一个机制"，价格差用来表达序，不表达量级。
+                        // ⚠ 卡面写了"格斗弹不读这个指定"——那句不是凑字数。格斗弹的扇形是**发射判据**，
+                        // 与这条被裁掉的射前锥是两个名词两个字段（他逐字「目标给普通导弹用，格斗弹不用」），
+                        // 不写出来，玩家会以为点了屏之后近身那把也会改打远处的指定目标。
+                        com.flexiatom.pixelraider.gfx.SpriteSheets.ID_SHOP_RADAR, 66, 0),
             };
         }
     }

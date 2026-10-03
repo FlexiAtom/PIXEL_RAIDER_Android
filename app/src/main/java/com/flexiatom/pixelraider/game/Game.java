@@ -46,11 +46,13 @@ import com.flexiatom.pixelraider.gfx.TextCache;
 import com.flexiatom.pixelraider.plat.KeyValue;
 import com.flexiatom.pixelraider.plat.QualityProfile;
 import com.flexiatom.pixelraider.plat.Screen;
+import com.flexiatom.pixelraider.ui.DebugScreen;
 import com.flexiatom.pixelraider.ui.GrowthScreen;
 import com.flexiatom.pixelraider.ui.HudLayout;
 import com.flexiatom.pixelraider.ui.HudText;
 import com.flexiatom.pixelraider.ui.MenuScreen;
 import com.flexiatom.pixelraider.ui.PauseScreen;
+import com.flexiatom.pixelraider.ui.RadarLayout;
 import com.flexiatom.pixelraider.ui.RevealScript;
 import com.flexiatom.pixelraider.ui.ResultScreen;
 import com.flexiatom.pixelraider.ui.ShopScreen;
@@ -191,6 +193,9 @@ public final class Game implements GameThread.Host {
     private final Paint stroke = new Paint();
     private final Paint text = new Paint();
     private final RectF rf = new RectF();
+    /** 四个角的**方向**（{@link #drawRadar} 用它把一圈 L 拆成四次循环，而不是在绘制热路径上 new 数组）。 */
+    private static final int[] BRACKET_X = {-1, 1, -1, 1};
+    private static final int[] BRACKET_Y = {-1, -1, 1, 1};
     private static final Path WEDGE = new Path();
     private static final Paint WEDGE_PAINT = new Paint();
     static {
@@ -205,6 +210,22 @@ public final class Game implements GameThread.Host {
     /** 切枪键：与炸弹键同一套换算（绘制框 HUD 相对、命中框加 hudTop），也摆在同一条底线。 */
     private final RectI switchDraw = new RectI();
     private final RectI switchHit = new RectI();
+    /** 雷达屏：换算同前三枚键。它**不是按钮**，命中框只用来判"这一跳落在屏内还是屏外"。 */
+    private final RectI radarDraw = new RectI();
+    private final RectI radarHit = new RectI();
+    /** 点选时的草稿三张：两张本地坐标 ＋ 一张对应 obj 槽号（为什么必须有第三张见 {@link #pickRadarTarget}）。 */
+    private float[] radarXs = new float[0];
+    private float[] radarYs = new float[0];
+    private int[] radarSlots = new int[0];
+    /**
+     * 玩家指定的那一只（敌 obj 槽号），{@link MissileBehavior#NO_DESIGNATED} = 没指定。
+     *
+     * <p>它与 {@link #designatedBorn} 是**一对**：{@code Enemies} 回收槽位，光存槽号会在上一只刚死、
+     * 下一只接手同一槽位时把指定安静地跳到玩家从没点过的敌机上。完整有效性判据三条，
+     * 抄 {@link Enemies#isLive} 那条注释的口径（isLive ∧ born 对得上 ∧ hp &gt; 0）。
+     */
+    private int designatedSlot = MissileBehavior.NO_DESIGNATED;
+    private long designatedBorn;
     private final InputRouter.Event ev = new InputRouter.Event();
     private final int[] firedCommands = new int[4];
 
@@ -231,6 +252,8 @@ public final class Game implements GameThread.Host {
     private final MenuScreen menu = new MenuScreen(font, uiText, glow);
     /** 成长页：局外成长树的**消费面板**——{@code GrowthTree} 今天终于有人读它了。同上。 */
     private final GrowthScreen growthPage = new GrowthScreen(font, uiText, glow);
+    /** 调试页（仅 debug 构建可达）。同上。 */
+    private final DebugScreen debug = new DebugScreen(font, uiText, glow);
     /** 局内成长：商店卡买到的等级与五个乘子（局外那套在 {@link #growth}，两套互不覆盖）。 */
     private final ShopRun shopRun = new ShopRun();
     /**
@@ -247,6 +270,18 @@ public final class Game implements GameThread.Host {
     private int lastFlowPhase = WaveFlow.PREP;
     /** 这条边沿的商店还没开出去（栈顶被别的面板占着），等它空出来补开。 */
     private boolean shopPending;
+    /** 进入调试页的界面时刻（面板入场与级联以它为原点，与商店同款）。 */
+    private float debugAtUi;
+    /**
+     * 是否 debug 构建（FLAG_DEBUGGABLE）。由 plat 在启动时注入，决定暂停页那枚「调试」入口画不画——
+     * 正式包不注册它的命中也不淡入，与 {@code PauseScreen} 里"未落地的出口整条剔除"同一条口径。
+     */
+    private boolean debugBuild;
+    /**
+     * 调试开关：允许非制导武器（脉冲）也发射格斗弹。目视验证用——格斗弹平时只在制导弹上触发，
+     * 换弹型成本高，这个开关把那一步绕过去。默认 false，只在本进程内翻转，绝不落盘。
+     */
+    private boolean debugPulseDogfight;
     /** 本局原始计数（结算页的输入）。 */
     private final RunStats stats = new RunStats();
     /** 暂停面板折线图的数据源：按世界秒累计，暂停期间不推进。 */
@@ -329,6 +364,15 @@ public final class Game implements GameThread.Host {
         growth.readFrom(store);
     }
 
+    /**
+     * 是否 debug 构建（FLAG_DEBUGGABLE），由 plat 在启动时注入。唯一用途是暂停页那枚「调试」入口：
+     * 正式包里它既不画也不受理。值在这里落地，几何投递时随 {@link PauseScreen#layout} 传给面板
+     * 决定第二行的格数（见 {@link #debugBuild}）。
+     */
+    public void setDebugBuild(boolean debugBuild) {
+        this.debugBuild = debugBuild;
+    }
+
     /** 成长树读数给界面（主菜单/暂停面板）用，写只走 {@link GrowthTree#buyTreeUpgrade}。 */
     public GrowthTree growth() {
         return growth;
@@ -397,13 +441,20 @@ public final class Game implements GameThread.Host {
         HudLayout.switchRect(m.battleHeight(), switchDraw);
         Widgets.hitRect(switchDraw, hitBoxLogic, switchHit);
         switchHit.offsetInPlace(0, m.hudTop());
+        // 雷达屏**不做 48dp 外扩**（与上面三枚键的唯一差别）：它的命中框要是比绘制框大，
+        // "落在框内就不登记走位锚点"那条就会咬掉战场顶边外面一圈本来该用来走位的落点。
+        // 绘制框本身是 {@code HudLayout.RADAR_SIDE} = 48 逻辑格，够点。
+        HudLayout.radarRect(radarDraw);
+        radarHit.set(radarDraw.left, radarDraw.top, radarDraw.right, radarDraw.bottom);
+        radarHit.offsetInPlace(0, m.hudTop());
         result.layout(hitBoxLogic, m.pageTop(result.pageHeight()), m.logicH);
         // 三张固定页各自报整页高，居中原点由 pageTop 给（口径同结算页，不跟着战场长高）
         menu.layout(hitBoxLogic, m.pageTop(menu.pageHeight()), m.logicH);
         growthPage.layout(hitBoxLogic, m.pageTop(growthPage.pageHeight()), m.logicH);
         // 面板走整张逻辑画布坐标（要在 320~560 上分账图表与卡片），另需安全区让它从挖孔带让开
-        pause.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic);
+        pause.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic, debugBuild);
         shop.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic);
+        debug.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic);
         particles = new ParticlePool(QualityProfile.particleBudget(qualityTier));
         background.rebuild(Screen.LOGIC_W, m.logicH, qualityTier, 1);
         // 网格尺寸跟着画布走：高度是随屏幕比例算出来的，不重建就会在底部漏掉一整排
@@ -559,6 +610,11 @@ public final class Game implements GameThread.Host {
             closeShop();
             return;
         }
+        if (top == ModalStack.DEBUG) {
+            // 调试页叠在暂停页之上：返回键只把它掀回暂停页，时钟照旧冻着（同 closeDebug 的动作）
+            closeDebug();
+            return;
+        }
         if (modals.pop() == ModalStack.PAUSE) {
             time.setPaused(false);
             markModalClosed();
@@ -674,6 +730,55 @@ public final class Game implements GameThread.Host {
         }
     }
 
+    // ---- 调试页（仅 debug 构建） --------------------------------------------------------------
+
+    /**
+     * 开调试页：叠在暂停页之上，与 {@code openShop(ENTRY_PAUSE)} 同一形态——时钟本就冻着，
+     * 这里再冻一次是幂等。关掉它走 {@link #closeDebug} 只 pop 一层，玩家回到**同一块**暂停面板。
+     */
+    private void openDebug() {
+        debug.open();
+        modals.push(ModalStack.DEBUG);
+        time.setPaused(true);
+        dropMoveInput();
+        debugAtUi = time.ui();
+    }
+
+    /** 掀回暂停页：只把 DEBUG 出栈，时钟不动（理由同 {@code closeShop} 的 {@code ENTRY_PAUSE} 分支）。 */
+    private void closeDebug() {
+        if (modals.peek() != ModalStack.DEBUG) return;
+        modals.pop();
+    }
+
+    /**
+     * 调试页报上来的动作。**状态真值全在 {@code Game}，面板只是视图**：
+     * <ul>
+     *   <li>{@code ACTION_TOGGLE}：就地翻转 {@link #debugPulseDogfight}——绘制时又传回面板，画成新的态。</li>
+     *   <li>{@code ACTION_BACK}：{@link #closeDebug} 回暂停页，战场照旧定格。</li>
+     *   <li>{@code ACTION_VICTORY}/{@code ACTION_SETTLE}：先清模态、解冻时钟，再调那两条真链
+     *       （{@link #debugForceVictory}/{@link #debugEndRun}）。它们闸门只认栈顶 {@code NONE}——
+     *       此刻 DEBUG 压着 PAUSE，不清干净就会被闸门挡回、什么都不发生。清完走的是与 F8/F9 直按
+     *       完全同一条路径，取到的证才与真机一致。</li>
+     * </ul>
+     */
+    private void onDebugPointerUp(int action) {
+        if (action == DebugScreen.ACTION_TOGGLE) {
+            debugPulseDogfight = !debugPulseDogfight;
+            return;
+        }
+        if (action == DebugScreen.ACTION_BACK) {
+            closeDebug();
+            return;
+        }
+        if (action == DebugScreen.ACTION_VICTORY || action == DebugScreen.ACTION_SETTLE) {
+            modals.clear();
+            time.setPaused(false);
+            markModalClosed();
+            if (action == DebugScreen.ACTION_VICTORY) debugForceVictory();
+            else debugEndRun();
+        }
+    }
+
     /**
      * 买一张卡。**顺序即正确性**：先确认这张卡真的能升、再扣钱、最后才把效果打到现场上。
      *
@@ -759,6 +864,10 @@ public final class Game implements GameThread.Host {
             shop.pressDown(x, y, time.ui() - shopAtUi, id);
             return;
         }
+        if (top == ModalStack.DEBUG) {
+            debug.pressDown(x, y, time.ui() - debugAtUi, id);
+            return;
+        }
         if (top == ModalStack.MENU) {
             menu.pressDown(x, y, time.ui() - menuAtUi, id);
             return;
@@ -785,6 +894,14 @@ public final class Game implements GameThread.Host {
             detonateBomb();
             return;
         }
+        // 雷达屏排在走位锚点**之前**，且**不论点没点着敌点都吞掉这一跳**：他那条逐字是「按下即选、
+        // 落在框内就不登记走位锚点」。吞掉的理由不是排序，是这一跳的意图已经算数了——点空 = 取消指定
+        // （见 {@link #pickRadarTarget}），要是它再顺手把锚点登记到屏幕顶上，玩家一取消指定机体就跟着
+        // 往上跳一格，两条意图互相踩。
+        if (shopRun.radarOn() && radarHit.contains(x, y)) {
+            pickRadarTarget(x - radarHit.left, y - (metrics.hudTop() + HudLayout.RADAR_TOP));
+            return;
+        }
         if (movePointerId == -1) {
             movePointerId = id;
             anchorX = x;
@@ -802,6 +919,8 @@ public final class Game implements GameThread.Host {
             onPanelPointerUp(pause.pressUp(x, y, time.ui() - pauseAtUi, id));
         } else if (top == ModalStack.SHOP) {
             onShopPointerUp(shop.pressUp(x, y, time.ui() - shopAtUi, id));
+        } else if (top == ModalStack.DEBUG) {
+            onDebugPointerUp(debug.pressUp(x, y, time.ui() - debugAtUi, id));
         } else if (top == ModalStack.MENU) {
             onMenuPointerUp(menu.pressUp(x, y, time.ui() - menuAtUi, id));
         } else if (top == ModalStack.GROWTH) {
@@ -825,6 +944,8 @@ public final class Game implements GameThread.Host {
             closePause();
         } else if (action == PauseScreen.ACTION_SHOP) {
             openShop(ShopRules.ENTRY_PAUSE);
+        } else if (action == PauseScreen.ACTION_DEBUG) {
+            openDebug();   // 仅 debug 构建才会报出这个码（面板里那格 isLive 才受理）
         } else if (action == PauseScreen.ACTION_RESTART) {
             // 出口一级化（规格 §四）：重开直接生效，没有二次确认弹窗
             restartFade = 1f;
@@ -904,6 +1025,10 @@ public final class Game implements GameThread.Host {
         }
         if (top == ModalStack.SHOP) {
             shop.pressDrag(x, y, time.ui() - shopAtUi, id);
+            return;
+        }
+        if (top == ModalStack.DEBUG) {
+            debug.pressDrag(x, y, time.ui() - debugAtUi, id);
             return;
         }
         if (top == ModalStack.MENU) {
@@ -1309,7 +1434,10 @@ public final class Game implements GameThread.Host {
     }
 
     /**
-     * 导弹这一帧要走的全部三步：两条流各积分一次，然后格斗流补一次发射。
+     * 导弹这一帧要走的全部四步：先校验雷达屏上的指定，再两条流各积分一次，最后格斗流补一次发射。
+     *
+     * <p>{@link #stepDesignation} 排最前是它必须读本步的**新**敌表（敌人在上一步刚被打死、
+     * 槽位刚被复用），又要在 {@code beginFrame} 之前——否则弹拿着一个上一帧的死槽号装订。
      *
      * <p>两条流**共用这一个入口**是因为它们的差别全在 {@link MissileBehavior} 实例的身份里
      * （{@code stream} → {@code beginFrame} 解析有效值），不在调度顺序里。⚠ 先后次序本身**没有**
@@ -1321,25 +1449,103 @@ public final class Game implements GameThread.Host {
      * 与 {@link #stepDogEvictions}）：{@link Missiles#evicted} 是每个池自己的那一份唯一副本。
      */
     private void stepMissiles(float dt) {
-        stepPool(missiles, missileBehavior, dt);
-        stepPool(dogfightMissiles, dogfightBehavior, dt);
+        stepDesignation();
+        stepPool(missiles, missileBehavior, dt, designatedSlot);
+        // 格斗流**永远收 NO_DESIGNATED**（他 2026-10-03 逐字「目标给普通导弹用，格斗弹不用」）：
+        // 这道闸写在调用处而不是行为类里加一条按流别的分支，是因为两流的飞行层本来同形——
+        // 让"格斗弹看不见指定"成为一次传参，共用代码里就不会多出一个人人都要绕的 if。
+        stepPool(dogfightMissiles, dogfightBehavior, dt, MissileBehavior.NO_DESIGNATED);
         // 发射排在**本流全部 advance 之后**：tryLaunch 读的占用戳要包含"这一帧刚锁上的那些"，
         // 早一步就会朝同一只敌机在同一帧里出第二枚（判序写在 MissileBehavior#tryLaunch 的方法头）。
-        if (shopRun.dogfightOn() && player.weapon().guided) fireDogfight();
+        if (shopRun.dogfightOn() && (player.weapon().guided || debugPulseDogfight)) fireDogfight();
+    }
+
+    /**
+     * 「死了即清空」（他 2026-10-03 逐字）。每帧一次、O(1)，不做跨帧残留也不做队列：
+     * 指定是一块屏上的状态，屏上的点没了它就该跟着没。
+     *
+     * <p>判据三条，一条不多一条不少（口径抄 {@link Enemies#isLive} 那条注释自己写的完整式子）：
+     * ① 还在活跃表里 —— 槽位会被回收，光 {@code hp > 0} 会把"接手这一格的下一只"读成"指定还有效"；
+     * ② {@code born} 对得上 —— 这一条才是"还是我点的那一只"的唯一署名；
+     * ③ 血没归零 —— 摘表延后到 {@link #reapDead}（那是刻意的，见那里），所以归零的敌在本步仍在表里。
+     *
+     * <p>⚠ {@link MissileBehavior#advance} 里读指定时**还会再判一次** ①③。这不是重复：那里判的是
+     * "本步刚出膛的这一刻它还能不能用"，而 {@code stepEnemies} 与弹道积分之间隔着一次
+     * {@link #spawnQueued}，任何一道闸改了敌表都得让下游自己确认，不能让上游的承诺跨越三步还有效。
+     */
+    private void stepDesignation() {
+        if (designatedSlot == MissileBehavior.NO_DESIGNATED) return;
+        Enemies.Enemy e = enemies.objAt(designatedSlot);
+        if (!enemies.isLive(designatedSlot) || e == null || e.born != designatedBorn || e.hp <= 0) {
+            designatedSlot = MissileBehavior.NO_DESIGNATED;
+        }
+    }
+
+    /**
+     * 雷达屏上的一点 → 指定谁。坐标是**雷达本地**的（原点 = 方块左上角，换算见 {@link #onPointerDown}）。
+     *
+     * <p>取容差内最近的那只（{@link RadarLayout#nearestOf}），一个都没进容差 ⇒ **取消指定**：
+     * 他给的口径是「死了即清空」，"点空了也清空"是同一条意图的另一半——屏上是玩家在下指令，
+     * 替他挑一只他没说过的属于越权。
+     */
+    private void pickRadarTarget(float lx, float ly) {
+        int n = enemies.activeCount();
+        if (radarXs.length < n) {
+            radarXs = new float[n];
+            radarYs = new float[n];
+            radarSlots = new int[n];
+        }
+        int slots = 0;
+        for (int i = 0; i < n; i++) {
+            Enemies.Enemy e = enemies.activeAt(i);
+            if (e == null || e.hp <= 0) continue;      // 血已归零但还没摘表的那几只不该可点
+            radarXs[slots] = radarLocalX(e);
+            radarYs[slots] = radarLocalY(e);
+            // ⚠ 第三张草稿是**必须**的：上面那个 continue 让"可点的那几只"的下标与活跃表下标脱钩，
+            // nearestOf 返回的是**草稿数组**的下标，直接拿去 slotOfActive 会点到隔壁那只。
+            radarSlots[slots] = enemies.slotOfActive(i);
+            slots++;
+        }
+        int hit = RadarLayout.nearestOf(radarXs, radarYs, slots, lx, ly, Balance.radar.hitTolerance);
+        if (hit < 0) {
+            designatedSlot = MissileBehavior.NO_DESIGNATED;
+            return;
+        }
+        designatedSlot = radarSlots[hit];
+        Enemies.Enemy picked = enemies.objAt(designatedSlot);
+        designatedBorn = picked == null ? 0L : picked.born;
+        if (haptics != null) haptics.tick();
+    }
+
+    /**
+     * 战场 → 雷达本地的横换算。**绘制端与点选端共用这两条**：各写一遍的话，两者一旦漂了
+     * 就是"点明明在那个点上、按下去却清了空"，那种 bug 只在真机上露头、单测钉不住。
+     */
+    private float radarLocalX(Enemies.Enemy e) {
+        float side = HudLayout.RADAR_SIDE;
+        return RadarLayout.clampToSquare(RadarLayout.toLocalX(e.x, Screen.LOGIC_W, side), side);
+    }
+
+    /** 纵的那条：原点减 {@code battleTop}（战场从 HUD 之下起算，而雷达量的是整块战场）。 */
+    private float radarLocalY(Enemies.Enemy e) {
+        float side = HudLayout.RADAR_SIDE;
+        return RadarLayout.clampToSquare(
+                RadarLayout.toLocalY(e.y - metrics.battleTop(), metrics.battleHeight(), side), side);
     }
 
     /**
      * 一流弹的相位积分 + 三路判据。**两条流各调一次**，方法头那条判序对两流同形（差异全部
      * 由 {@link MissileBehavior} 实例的 stream 在 {@code beginFrame} 里解析成有效值，这里不读流别）。
+     * 唯一的例外是 {@code designated}：它由**调用处**给（格斗流恒给"没人被指定"），本方法自己不分岔。
      *
      * <p>索敌与引信都**不碰 {@link SpatialGrid}**：网格的覆盖半径只有 {@code ring×CELL = 48px}，
      * 撑不到导引头的射程，用它只会得到"视野内的一小撮"⇒ 静默漏锁。这里扫的是活跃敌表
      * （≤ {@code Balance.wave.maxAlive} = 26），既正确又比建表+查询便宜。网格只留给
      * {@link #stepWarheads} 那条**近距**接触采样。
      */
-    private void stepPool(Missiles pool, MissileBehavior behavior, float dt) {
+    private void stepPool(Missiles pool, MissileBehavior behavior, float dt, int designated) {
         Balance.Missile spec = Balance.missile;
-        behavior.beginFrame(pool, enemies, spec, shopRun);
+        behavior.beginFrame(pool, enemies, spec, shopRun, designated);
         for (int i = pool.activeCount() - 1; i >= 0; i--) {
             Missiles.Missile m = pool.activeAt(i);
             int flags = behavior.advance(m, spec, dt, enemies,
@@ -1850,6 +2056,10 @@ public final class Game implements GameThread.Host {
     /** 整局重置（死亡后重开、以及 surfaceChanged 的一次性初始化）。 */
     public void resetRun() {
         enemies.clear();
+        // 指定挂在**敌池槽号**上，池子清空后那个 (槽号, born) 对就成了悬空引用。每帧
+        // {@link #stepDesignation} 那三条判据本来也会把它清掉，但那是"下一帧才发现"的清理；
+        // 新一局的雷达屏必须从"没人指定"开始，不能靠一条兜底判定去赢得开局第一帧。
+        designatedSlot = MissileBehavior.NO_DESIGNATED;
         shots.clear();
         hostile.clear();
         // 链只停止排放，**布局缓存留着**：它由武器号/弹丸数/周期三个数决定，而下局的
@@ -2097,6 +2307,8 @@ public final class Game implements GameThread.Host {
             c.translate(0f, metrics.hudTop());
             drawTopRow(c);
             drawStatusRow(c);
+            // 紧跟行2：它占的就是行2 右侧那段空地（几何见 HudLayout.RADAR_*）
+            drawRadar(c);
             drawBombButton(c);
             drawSwitchButton(c);
             drawBossBar(c);
@@ -2112,6 +2324,9 @@ public final class Game implements GameThread.Host {
         }
         if (modal == ModalStack.SHOP) {
             shop.draw(c, shopRun, time.ui() - shopAtUi);
+        }
+        if (modal == ModalStack.DEBUG) {
+            debug.draw(c, debugPulseDogfight, time.ui() - debugAtUi);
         }
         drawRestartFade(c);
         probe.end(FrameProbe.TAIL);
@@ -2509,6 +2724,96 @@ public final class Game implements GameThread.Host {
         fill.setColor(color);
         rf.set(box.centerX() - 1, mid - 1, box.centerX() + 1, mid + 1);
         c.drawRect(rf, fill);
+    }
+
+    /**
+     * 雷达屏（他 2026-10-03 逐字「在生命、护盾、过载和敌人那些条的右侧，放雷达屏幕（半透明绿色正方形，
+     * 带有网格…）」＋「敌点建议用黄色」）。
+     *
+     * <p>整块画在 HUD 的 {@code hudTop} 平移组里 ⇒ 这里全用 **HUD 相对坐标**，与
+     * {@link HudLayout#radarRect} 同一套口径（命中端在 {@code installGeometry} 里换一次算）。
+     * 底色**必须半透明**：HUD 是盖在战场上的读数层（{@code battleTop} 与 {@code hudTop} 是同一个数），
+     * 一块不透明的屏会在地面上开个洞。
+     *
+     * <p>形状分工三条各说一件事，混用就读出歧义：底色＋网格＝"这是一块屏"（不是第五条状态条），
+     * 黄点＝"场上有谁"，白括号＝"玩家点了谁"。选中态特意**不靠颜色**承担——敌点已经是黄的了。
+     *
+     * <p>没买「雷达锁定」时这一整块不画，命中端也不受理：两端共用 {@link ShopRun#radarOn()}
+     * 那**一个**谓词，不许各读一次等级。
+     */
+    private void drawRadar(Canvas c) {
+        if (!shopRun.radarOn()) return;
+        Balance.Radar r = Balance.radar;
+        final int left = HudLayout.RADAR_LEFT;
+        final int top = HudLayout.RADAR_TOP;
+        final int side = HudLayout.RADAR_SIDE;
+        fill.setColor(r.baseColor);
+        rf.set(left, top, left + side, top + side);
+        c.drawRect(rf, fill);
+        int cells = Math.max(1, r.gridCells);
+        fill.setColor(r.gridColor);
+        for (int i = 1; i < cells; i++) {
+            int gx = left + side * i / cells;
+            rf.set(gx, top + 1, gx + 1, top + side - 1);
+            c.drawRect(rf, fill);
+            int gy = top + side * i / cells;
+            rf.set(left + 1, gy, left + side - 1, gy + 1);
+            c.drawRect(rf, fill);
+        }
+        // 边框也走 fill：描边矩形在非抗锯齿下会压在半格上，与上面那套落格口径对不齐。
+        fill.setColor(r.borderColor);
+        rf.set(left, top, left + side, top + 1);
+        c.drawRect(rf, fill);
+        rf.set(left, top + side - 1, left + side, top + side);
+        c.drawRect(rf, fill);
+        rf.set(left, top + 1, left + 1, top + side - 1);
+        c.drawRect(rf, fill);
+        rf.set(left + side - 1, top + 1, left + side, top + side - 1);
+        c.drawRect(rf, fill);
+
+        int dot = Math.max(1, Math.round(r.dotRadius));
+        fill.setColor(r.enemyColor);
+        for (int i = 0; i < enemies.activeCount(); i++) {
+            Enemies.Enemy e = enemies.activeAt(i);
+            if (e == null || e.hp <= 0) continue;      // 与点选端同一条筛选：画得出就该点得着
+            int px = left + (int) radarLocalX(e);
+            int py = top + (int) radarLocalY(e);
+            rf.set(px - dot, py - dot, px + dot, py + dot);
+            c.drawRect(rf, fill);
+        }
+
+        // 自机：三行 1/3/5 的方格堆成朝上的实心三角。不用 Path——斜边在非抗锯齿画布上糊成一团灰，
+        // 而这块屏只有 48 格，一团体灰就自机自己。
+        fill.setColor(r.shipColor);
+        int sx = left + (int) RadarLayout.clampToSquare(
+                RadarLayout.toLocalX(player.x, Screen.LOGIC_W, side), side);
+        int sy = top + (int) RadarLayout.clampToSquare(
+                RadarLayout.toLocalY(player.y - metrics.battleTop(), metrics.battleHeight(), side), side);
+        for (int row = 0; row < 3; row++) {
+            rf.set(sx - row, sy - 1 + row, sx + row + 1, sy + row);
+            c.drawRect(rf, fill);
+        }
+
+        // 指定态（唯一一个"读玩家输入"的形状，所以最后画，压在点上）
+        if (designatedSlot == MissileBehavior.NO_DESIGNATED) return;
+        Enemies.Enemy d = enemies.objAt(designatedSlot);
+        if (d == null || d.hp <= 0) return;            // 与 {@link #stepDesignation} 同一帧生效，画空槽没意义
+        int cx = left + (int) radarLocalX(d);
+        int cy = top + (int) radarLocalY(d);
+        int bl = Math.max(2, Math.round(r.bracketLen));
+        int off = dot + 1;                             // 让开本体，括号不糊在点上
+        for (int i = 0; i < 4; i++) {
+            int dx = BRACKET_X[i];
+            int dy = BRACKET_Y[i];
+            int cornerX = cx + dx * off;
+            int cornerY = cy + dy * off;
+            rf.set(Math.min(cornerX, cornerX + dx * bl), cornerY,
+                    Math.max(cornerX, cornerX + dx * bl) + 1, cornerY + 1);
+            c.drawRect(rf, fill);
+            rf.set(cornerX, Math.min(cornerY, cornerY + dy * bl), cornerX + 1,
+                    Math.max(cornerY, cornerY + dy * bl) + 1);
+            c.drawRect(rf, fill);
+        }
     }
 
     /** [规格 §四] Boss 血条：整幅宽、二阶段把变奏点标出来——玩家要看得见"还差多少才换弹道"。 */

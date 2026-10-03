@@ -28,9 +28,11 @@ import java.util.Set;
 import org.junit.Test;
 
 /**
- * 升级商店的规则端（规格 §升级商店：每波三选一、不是纯随机；卡表今天 19 张，规格钉的是 11 张——
+ * 升级商店的规则端（规格 §升级商店：每波三选一、不是纯随机；卡表今天 20 张，规格钉的是 11 张——
  * 「随机强化」是 2026-10-01 按他的加成卡裁定加的，簇 II 四张导弹卡是 6e/6d 落的，两张武器解锁卡
- * 「基础导弹」「基础激光」是 2026-10-02 按他「商店新增…」那句加的。别把后七张记成规格原文）。
+ * 「基础导弹」「基础激光」是 2026-10-02 按他「商店新增…」那句加的，「连续杆」同批，「雷达锁定」是
+ * 2026-10-03 他裁"那块雷达屏是这张卡的商品"时补建的（那张卡<b>从来没有落地过</b>，见 Balance 卡表那格）。
+ * 别把后九张记成规格原文）。
  *
  * <p>2026-10-01 双入口分区（commit B1）之后，这块板子测的是<b>两家店</b>：{@code ENTRY_WAVE}
  * 那一家仍按"三选一 + prio"抽样，{@code ENTRY_PAUSE} 那一家把非通用侧摆出来、不抽样也不打折。
@@ -82,9 +84,9 @@ public class ShopRulesTest {
     // ---- 表本身 ---------------------------------------------------------------------------
 
     @Test
-    public void cardTableIsTheSpecifiedNineteenCardsInIdOrder() {
-        assertEquals("卡表钉死 19 张（11 张 ＋「随机强化」＋ 簇 II 四张导弹卡 ＋ 两张武器解锁卡 ＋「连续杆」）",
-                19, CARDS);
+    public void cardTableIsTheSpecifiedTwentyCardsInIdOrder() {
+        assertEquals("卡表钉死 20 张（11 张 ＋「随机强化」＋ 簇 II 四张导弹卡 ＋ 两张武器解锁卡 ＋「连续杆」＋「雷达锁定」）",
+                20, CARDS);
         assertEquals("卡表长度必须跟 CARDS 一致，否则快照数组会短一截", CARDS, Balance.shopCards.length);
         for (int id = 0; id < CARDS; id++) {
             assertEquals("第 " + id + " 项的 id 与下标不符（id 是货架槽位→卡 id 的唯一桥梁）",
@@ -201,8 +203,8 @@ public class ShopRulesTest {
             if (ShopRules.isWaveCard(id)) wave++; else build++;
         }
         assertEquals("通用侧（回合店）今天六张", 6, wave);
-        assertEquals("非通用侧（暂停店）十三张——按谓词数，不是按货架数（货架今天只摆 8 张）",
-                13, build);
+        assertEquals("非通用侧（暂停店）十四张——按谓词数，不是按货架数（货架今天只摆 8 张）",
+                14, build);
         assertEquals("两侧合起来正好覆盖整张卡表。今天'不漏'是由 default 自动保证的（一个谓词、"
                         + "两侧互补）；这条钉的是将来两侧拆成两个独立判据时那张两头都不认的卡",
                 CARDS, wave + build);
@@ -254,7 +256,7 @@ public class ShopRulesTest {
      * <ul>
      *   <li>整条 id 序列 {@code [0, 1, 2, 3, 9, 10, 16, 17]}：张数与构成一次钉死，挡住"暂停店也走
      *       三选一"（那等于把抽样搬进面板，他这句话要的是常驻），也挡住 default 那一路的静默漏登记。
-     *       11 不在表里因为它（随机强化）是通用侧，4..8 那几格同理；<b>12..15 与 18 这五格</b>不在是因为
+     *       11 不在表里因为它（随机强化）是通用侧，4..8 那几格同理；<b>12..15、18 与 19 这六格</b>不在是因为
      *       这一档还没买解锁卡（{@link #theMissileBuildCardsWaitBehindTheUnlockGate}）。</li>
      *   <li>换一个大种子开出同一条货架：证明这一侧真的不读随机数。</li>
      *   <li>按 id 而不是按余额排（同一条断言）：货位一旦随金币漂移，玩家下次拉开面板得重新找
@@ -284,26 +286,28 @@ public class ShopRulesTest {
     }
 
     /**
-     * 导弹流那五张构筑卡<b>排在「基础导弹」之后</b>才上架。
+     * 导弹流那**六张**构筑卡<b>排在「基础导弹」之后</b>才上架。
      *
      * <p>这一条是我自己的推论，他不是这么说的（他给的是「商店新增『基础导弹』和『基础激光』」＋
      * 「加个切换键」），但它挡的是他实测报出的那半条病因：「格斗导弹购买后无效果」——上游没开闸时
      * 下游照卖，玩家花 70/60/45/90/65 买到的是一组**没有弹体去读**的参数。四张改导引参数与发射判据、
-     * 第五张（连续杆）改炸开那一下的战斗部，全都只在场上真的飞得出导弹时才有"买了之后数值一定变"
+     * 第五张（连续杆）改炸开那一下的战斗部，第六张（雷达锁定，2026-10-03）改的是**普通弹发射前
+     * 那一锁听不听玩家指定**，全都只在场上真的飞得出导弹时才有"买了之后数值一定变"
      * 这个 {@code isValid} 判据所说的意义。
      *
-     * <p>正反两面都断：没买时五张既无效也不上架；买过解锁卡之后五张**一起**回来，且此时那条
-     * id 序列变成 12 格（货架长度就是"这一家当下摆几张"的真读数）。
+     * <p>正反两面都断：没买时六张既无效也不上架；买过解锁卡之后六张**一起**回来，且此时那条
+     * id 序列变成 13 格（货架长度就是"这一家当下摆几张"的真读数）。
      */
     @Test
     public void theMissileBuildCardsWaitBehindTheUnlockGate() {
         int[] gated = {Balance.ShopCard.MID_COURSE, Balance.ShopCard.IGNITION,
-                Balance.ShopCard.HANDLING, Balance.ShopCard.DOGFIGHT, Balance.ShopCard.ROD};
+                Balance.ShopCard.HANDLING, Balance.ShopCard.DOGFIGHT, Balance.ShopCard.ROD,
+                Balance.ShopCard.RADAR};
         ShopRules.Snapshot locked = snap(8, 100, 999);
         for (int id : gated) {
             assertFalse("手上没有导弹就卖导引参数：" + Balance.shopCards[id].name,
                     ShopRules.isValid(id, locked));
-            assertFalse("无效的五张里又有卡上架了：" + Balance.shopCards[id].name,
+            assertFalse("无效的六张里又有卡上架了：" + Balance.shopCards[id].name,
                     has(shelf(locked), id));
         }
         ShopRules.Snapshot open = snap(8, 100, 999);
@@ -313,8 +317,8 @@ public class ShopRulesTest {
                     ShopRules.isValid(id, open));
             assertTrue("闸门开了却没上架：" + Balance.shopCards[id].name, has(shelf(open), id));
         }
-        assertEquals("手推：没买时 8 张，买过一级之后「基础导弹」自己下架（−1）、五张构筑卡回来（+5）= 12",
-                12, shelf(open).length);
+        assertEquals("手推：没买时 8 张，买过一级之后「基础导弹」自己下架（−1）、六张构筑卡回来（+6）= 13",
+                13, shelf(open).length);
     }
 
     /** 满级的构筑卡从暂停货架上掉下去，而不是摆在那儿点不动（与通用侧同一个 {@code isValid} 闸门）。 */
@@ -334,31 +338,38 @@ public class ShopRulesTest {
      * <p>这条同时钉住"满级 = 1"这个哨兵没被写成 {@code UNLIMITED}——真写成不限级，玩家能花七十金
      * 买第二遍同一个机制，那是纯损失，而卡面上没有任何东西会告诉他这件事。
      *
-     * <p>格斗弹与连续杆走的是**同一条形状**（买断一个机制 ⇒ 买过就下架），所以三张并列在这儿：
-     * 断的是"开闸 12 张 − 三张买断 = 9"。漏登记任何一张的满级档数（{@code maxLevelOf} 的 default
+     * <p>格斗弹、连续杆、雷达锁定走的是**同一条形状**（买断一个机制 ⇒ 买过就下架），所以四张并列在这儿：
+     * 断的是"开闸 13 张 − 四张买断 = 9"。漏登记任何一张的满级档数（{@code maxLevelOf} 的 default
      * 是 UNLIMITED），它就下架不了、这个数立刻变成 10。
+     *
+     * <p>后面那一份快照把同一个形状断在**两张解锁卡自己**身上，顺带钉住开闸后的构成：6 张常驻构筑
+     * ＋ 6 张导弹流卡 = 12。少了「雷达锁定」那格会变 11，而 11 看起来完全像个合理的数——这正是
+     * 这条要按张数写死的原因。
      */
     @Test
     public void theBuyOutCardLeavesTheShelfOnceItIsOwned() {
         assertEquals(1, ShopRules.maxLevelOf(Balance.ShopCard.MID_COURSE));
         ShopRules.Snapshot s = snap(8, 100, 999);
-        // 那五张导弹卡挂在解锁闸门后面（见 {@link #theMissileBuildCardsWaitBehindTheUnlockGate}），
-        // 所以这里先开闸再谈"买过就下架"；开闸后货架是 12 张。
+        // 那六张导弹卡挂在解锁闸门后面（见 {@link #theMissileBuildCardsWaitBehindTheUnlockGate}），
+        // 所以这里先开闸再谈"买过就下架"；开闸后货架是 13 张。
         s.level[Balance.ShopCard.BASIC_MISSILE] = 1;
         assertTrue("没买的时候它必须在货架上", has(shelf(s), Balance.ShopCard.MID_COURSE));
         assertTrue("没买的时候它必须在货架上", has(shelf(s), Balance.ShopCard.DOGFIGHT));
         assertTrue("没买的时候它必须在货架上", has(shelf(s), Balance.ShopCard.ROD));
+        assertTrue("没买的时候它必须在货架上", has(shelf(s), Balance.ShopCard.RADAR));
         s.level[Balance.ShopCard.MID_COURSE] = 1;
         s.level[Balance.ShopCard.DOGFIGHT] = 1;
         s.level[Balance.ShopCard.ROD] = 1;
+        s.level[Balance.ShopCard.RADAR] = 1;
         assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.MID_COURSE));
         assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.DOGFIGHT));
         assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.ROD));
-        assertEquals("其余九张不受影响（开闸 12 张 − 三张买断）", 9, shelf(s).length);
+        assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.RADAR));
+        assertEquals("其余九张不受影响（开闸 13 张 − 四张买断）", 9, shelf(s).length);
 
         // 两张武器解锁卡**自己也是这个形状**：买一级即永久生效，之后不许再摆着让人买第二遍
         // （"激光能买两级"不是一种可解释的商品，所以两张共用 weaponUnlockMaxLevel = 1）。
-        // 断在未开闸的那一份快照上：闸门只管下游四张，解锁卡本身一直可达，直到它被买走。
+        // 断在未开闸的那一份快照上：闸门只管下游六张，解锁卡本身一直可达，直到它被买走。
         ShopRules.Snapshot fresh = snap(8, 100, 999);
         assertTrue("没买的解锁卡不在货架上", has(shelf(fresh), Balance.ShopCard.BASIC_LASER));
         assertTrue("没买的解锁卡不在货架上", has(shelf(fresh), Balance.ShopCard.BASIC_MISSILE));
@@ -366,8 +377,8 @@ public class ShopRulesTest {
         fresh.level[Balance.ShopCard.BASIC_MISSILE] = 1;
         assertFalse("激光买过一级之后还挂着", has(shelf(fresh), Balance.ShopCard.BASIC_LASER));
         assertFalse("导弹买过一级之后还挂着", has(shelf(fresh), Balance.ShopCard.BASIC_MISSILE));
-        assertEquals("6 张常驻构筑卡 ＋ 闸门随之开出的 5 张导弹卡（两张解锁卡自己下架）",
-                11, shelf(fresh).length);
+        assertEquals("6 张常驻构筑卡 ＋ 闸门随之开出的 6 张导弹流卡（两张解锁卡自己下架）",
+                12, shelf(fresh).length);
     }
 
     /**
@@ -1109,9 +1120,11 @@ public class ShopRulesTest {
      * <p>这条是他 2026-10-02 报的病因直接换来的（「实测格斗导弹购买后无效果，或者说应该是从子弹
      * 切换到导弹（或激光）的一套都没做」）。报之前 508 条测试全绿，因为每一层单独看都自洽：
      * {@code Balance.weapons} 里导弹那一格在、{@code BulletChain} 会按 {@code guided} 分流、
-     * 导弹仿真会飞——可 {@code MISSILE} 这一把<b>从来没有获取途径</b>（唯一入口是物理键盘 1..6，
-     * 触屏没有切枪面），于是 {@code Game} 里那条 {@code dogfightOn() && player.weapon().guided}
+     * 导弹仿真会飞——可 {@code MISSILE} 这一把<b>当时从来没有获取途径</b>（唯一入口是物理键盘 1..6，
+     * 触屏没有切枪面），于是 {@code Game} 里那条**当时的**闸门 {@code dogfightOn() && guided}
      * 在读表上恒假。缺的正是"输入面 → 武器表"这一跳，所以要写成一条断言，而不是等他再实测一次。
+     * （今天那条闸门是 {@code dogfightOn() && (guided || debugPulseDogfight)}，后半那枚只是调试包的
+     * 观测口；这条用例钉的仍是**正常玩法**那半边，与它无关。）
      *
      * <p>三段各钉一层，中间那个 {@code ShopRun.nextUnlockedWeapon} 就是切枪键按下时 {@code Game}
      * 调的那一个函数：① 两张解锁卡都没买时，循环<b>永远</b>走不到导弹与激光；② 买了「基础导弹」

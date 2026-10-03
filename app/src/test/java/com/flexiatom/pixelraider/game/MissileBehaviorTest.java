@@ -311,12 +311,83 @@ public final class MissileBehaviorTest {
         if (radar) bad.radarHalfDeg = halfDeg; else bad.seekerHalfDeg = halfDeg;
         Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
         try {
-            beh.beginFrame(pool, foes, bad, run);
+            beh.beginFrame(pool, foes, bad, run, MissileBehavior.NO_DESIGNATED);
             beh.advance(m, bad, STEP, foes, W, H, FAR);
             throw new AssertionError((radar ? "radar" : "seeker") + "HalfDeg=" + halfDeg + " 应该当场炸");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("cone half angle"));
         }
+    }
+
+    // ---- 一之二、雷达屏指定（2026-10-03 七条逐字里的三条）--------------------------------------
+
+    /**
+     * 「压过取最近」＋「这个限制是一锁（不是发射后的二锁）」——两句一起钉，因为它们合起来才是
+     * 指定在射前那一段的完整权力边界：**压过锥内的最近者**，而且**可以在锥外**。
+     */
+    @Test
+    public void designatedEnemyOverridesTheConeNearest() {
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy near = bearingUp(START_X, START_Y, 12f, 200f);          // 锥内、更近
+        Enemies.Enemy picked = bearingUp(START_X, START_Y, 150f, 320f);       // 机头正后方 ⇒ 锥外
+        frame(m, slotOf(picked));
+        assertTrue("指定的那只没被装订（unitSet=" + m.unitSet + "）", m.unitSet);
+        assertEquals("装订点不是指定的那只 ⇒ 「压过取最近」没生效", picked.x, m.unitX, 1f);
+        assertEquals("装订点不是指定的那只", picked.y, m.unitY, 1f);
+        assertNotSame("装订到了锥内最近的那只 ⇒ 指定被扫描盖掉了", near, foes.objAt(m.boundSlot));
+        assertEquals("指定只换目标、不该把互斥提前到开眼之前",
+                Missiles.Missile.NO_TARGET, m.targetSlot);
+    }
+
+    /** 没指定时**必须**退回原来那一条扫描——这条断的是"指定不是新增的第二套索敌"。 */
+    @Test
+    public void noDesignationFallsBackToTheConeScan() {
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy near = bearingUp(START_X, START_Y, 12f, 200f);
+        bearingUp(START_X, START_Y, 150f, 320f);                              // 锥外那只没被指定就不该看见
+        frame(m, MissileBehavior.NO_DESIGNATED);
+        assertEquals("退回扫描时挑的不是锥内最近", near.x, m.unitX, 1f);
+    }
+
+    /**
+     * 「死了即清空」在弹这一侧的落点：指定指向一只血已归零的敌 ⇒ 当帧就按没人指定处理。
+     *
+     * <p>{@code Game} 每帧也清一次（{@code stepDesignation}），这里钉的是**另一件事**：那一次清理
+     * 排在 {@code spawnQueued} 之后、{@code beginFrame} 之前，中间任何一处把敌表改了，装订段都得
+     * 自己再看一眼，不能拿着上游三步之前的承诺去解拦截点。
+     */
+    @Test
+    public void aDeadDesignationIsNotBound() {
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy picked = bearingUp(START_X, START_Y, 0f, 300f);
+        int slot = slotOf(picked);
+        picked.hp = 0;
+        frame(m, slot);
+        assertFalse("指定的那只已经死了还照着它装订 ⇒ 打的是空气", m.unitSet);
+    }
+
+    /**
+     * 一敌一锁**不让位**：他裁的是「压过<b>取最近</b>」，不是「压过<b>别人的锁</b>」。
+     * 指定的那只本帧已被开眼的弹锁着 ⇒ 这一枚退回锥内扫描，场上不会有两枚弹抢同一只手里的目标。
+     */
+    @Test
+    public void aLockedDesignationYieldsToTheHolder() {
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy picked = bearingUp(START_X, START_Y, 150f, 320f);       // 锥外，只有指定能给它
+        Missiles.Missile holder = coastingIn(pool, START_X, START_Y - 100f, 0f, -40f);
+        lockAt(holder, picked);                                               // 本帧的占用戳由它撑起
+        int slot = slotOf(picked);
+        frame(m, slot);
+        assertFalse("有人在锁还抢 ⇒ 一敌一锁被指定盖掉了", m.unitSet);
+    }
+
+    /** 槽号越界（池容量之外的数）不该炸、更不该被当成"有人被指定"。 */
+    @Test
+    public void aSlotOutsideThePoolIsIgnored() {
+        Missiles.Missile m = justFired(START_X, START_Y, 0f, -MUZZLE_SPEED);
+        Enemies.Enemy near = bearingUp(START_X, START_Y, 12f, 200f);
+        frame(m, ENEMY_CAP + 7);
+        assertEquals("越界指定把锥内扫描一起废掉了", near.x, m.unitX, 1f);
     }
 
     // ---- 二、导引头视场（半角 30°、锥轴 = 当前速度方向）+ 再次点火 ----------------------------
@@ -550,7 +621,7 @@ public final class MissileBehaviorTest {
 
         float ax0 = turning.vx, ay0 = turning.vy;
         for (int s = 0; s < 30; s++) {
-            beh.beginFrame(pool, foes, spec, run);
+            beh.beginFrame(pool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
             beh.advance(straight, spec, STEP, foes, W, H, FAR);
             beh.advance(turning, spec, STEP, foes, W, H, FAR);
             assertEquals("第 " + s + " 步两枚弹速率不同 ⇒ 转弯改掉了速率",
@@ -968,7 +1039,7 @@ public final class MissileBehaviorTest {
         // 补成"开眼的滑行段"再走一步：mode0 下新出膛的那枚只会装订，用它验松手是问错了人
         settle(replacement, START_X, START_Y, 0f, -MUZZLE_SPEED);
         openEye(replacement);
-        beh.beginFrame(tiny, foes, spec, run);
+        beh.beginFrame(tiny, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         int flags = beh.advance(replacement, spec, STEP, foes, W, H, FAR);
         assertTrue("满池淘汰之后这一格还是锁不上 ⇒ 上一代的戳留下了（flags=" + flags + "）",
                 (flags & MissileBehavior.FLAG_ACQUIRED) != 0);
@@ -1020,7 +1091,7 @@ public final class MissileBehaviorTest {
             case PATH_OFFSCREEN:
                 holder.y = START_Y + 200f;
                 holder.vy = MUZZLE_SPEED;
-                beh.beginFrame(pool, foes, spec, run);
+                beh.beginFrame(pool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
                 assertTrue((beh.advance(holder, spec, STEP, foes, W, H, 40)
                         & MissileBehavior.FLAG_GONE) != 0);
                 break;
@@ -1098,7 +1169,7 @@ public final class MissileBehaviorTest {
     public void anEnemyPoolOfAnotherCapacityFailsLoudly() {
         Enemies other = new Enemies(ENEMY_CAP + 1);
         try {
-            beh.beginFrame(pool, other, spec, run);
+            beh.beginFrame(pool, other, spec, run, MissileBehavior.NO_DESIGNATED);
             throw new AssertionError("位图按敌人容量建，容量换了必须炸，不能靠调用方记住");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("capacity"));
@@ -1140,7 +1211,7 @@ public final class MissileBehaviorTest {
      */
     @Test
     public void theLaunchGateHandsBackTheNearestEnemyInsideItsSector() {
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         assertEquals("场上没人 ⇒ 一枚都不许出", -1, dog.tryLaunch(START_X, START_Y, foes, spec));
         bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);          // 轴上，但在半径外
         assertEquals("半径也算进锁定 ⇒ 这张卡变成了射程无限的第二把主炮",
@@ -1185,7 +1256,7 @@ public final class MissileBehaviorTest {
         Missiles.Missile std = coasting(START_X, START_Y, 0f, -MUZZLE_SPEED);
         lockAt(std, prey);                        // 普通弹的锁挂在**标准流**那一套表上
         frame(std);
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         assertEquals("跨池排他了 ⇒ 已挂普通锁的目标没人补位，而近身问题正是格斗弹来解的",
                 slotOf(prey), dog.tryLaunch(START_X, START_Y, foes, spec));
         Missiles.Missile m = dogPool.spawn();
@@ -1193,7 +1264,7 @@ public final class MissileBehaviorTest {
         dog.armDogfight(m, foes, slotOf(prey));
         assertEquals("同一帧刚锁上就再派一枚 ⇒ 一敌一锁没接住",
                 -1, dog.tryLaunch(START_X, START_Y, foes, spec));
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
     }
 
@@ -1225,7 +1296,7 @@ public final class MissileBehaviorTest {
     @Test
     public void anUnarmedDogfightMissileFailsLoudlyInsteadOfLockingLate() {
         bearingUp(START_X, START_Y, 0f, 40f);
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         Missiles.Missile m = dogPool.spawn();                  // 带着 RADAR_PENDING 出膛＝没装配
         settle(m, START_X, START_Y, 0f, -MUZZLE_SPEED);
         try {
@@ -1259,7 +1330,7 @@ public final class MissileBehaviorTest {
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("beginFrame"));
         }
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         try {
             dog.armDogfight(m, foes, -1);
             throw new AssertionError("-1 是调用方漏了判空，静默装配会造出一枚无的弹");
@@ -1466,7 +1537,7 @@ public final class MissileBehaviorTest {
         }
         bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);
         bearingUp(START_X, START_Y, spec.dogfightHalfDeg + 10f, 20f);
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
     }
 
@@ -1531,6 +1602,11 @@ public final class MissileBehaviorTest {
         return frameAt(m, STEP, FAR);
     }
 
+    /** {@link #frameAt} 的指定版：一句话——"这一帧雷达屏上点着的是 {@code designated}"。 */
+    private int frame(Missiles.Missile m, int designated) {
+        return frameAt(m, STEP, FAR, designated);
+    }
+
     /**
      * 走一遍 {@code Game.fireDogfight} 的真实路径：本帧 {@code beginFrame} → {@code tryLaunch} →
      * 出膛 → 装配。**调用前得先把敌人摆好**（它要的是"扇形里确有可锁目标"这个前提，摆不出来直接炸）。
@@ -1539,7 +1615,7 @@ public final class MissileBehaviorTest {
      * 自己拼 {@code targetSlot} 就绕过了"火控解出那一只"这半条设定（L36897）。
      */
     private Missiles.Missile armedDog() {
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         int slot = dog.tryLaunch(START_X, START_Y, foes, spec);
         assertTrue("扇形里没有可锁目标 ⇒ 这条用例摆错了位", slot >= 0);
         WeaponFire.Template t = new WeaponFire.Template();
@@ -1561,7 +1637,7 @@ public final class MissileBehaviorTest {
 
     /** {@link #frameAt} 的第二流版：池、行为、戳全部换成 {@link #dogPool}／{@link #dog}。 */
     private int dogStepAt(Missiles.Missile m, float dt, int margin) {
-        dog.beginFrame(dogPool, foes, spec, run);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         return dog.advance(m, spec, dt, foes, W, H, margin);
     }
 
@@ -1575,7 +1651,17 @@ public final class MissileBehaviorTest {
      * 边界两侧各钉一点，钉的才是判据本身。
      */
     private int frameAt(Missiles.Missile m, float dt, int margin) {
-        beh.beginFrame(pool, foes, spec, run);
+        return frameAt(m, dt, margin, MissileBehavior.NO_DESIGNATED);
+    }
+
+    /**
+     * 带**雷达屏指定**的那一版：指定槽号从这里进 {@code beginFrame}，其余不变。
+     *
+     * <p>它模拟的是 {@code Game.stepMissiles} 的真实接法（每帧把 {@code designatedSlot} 原样递下去），
+     * 不是"弹自己记得玩家点过谁"——指定是每帧一个入参，不写进弹体。
+     */
+    private int frameAt(Missiles.Missile m, float dt, int margin, int designated) {
+        beh.beginFrame(pool, foes, spec, run, designated);
         return beh.advance(m, spec, dt, foes, W, H, margin);
     }
 

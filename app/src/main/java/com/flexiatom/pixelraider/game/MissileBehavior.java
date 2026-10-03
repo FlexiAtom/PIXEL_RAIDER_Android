@@ -108,11 +108,30 @@ public final class MissileBehavior {
      *  全程锁不换目标、手里一空就自爆（口径三条各有所指，逐字见 {@link Balance.Missile} 的格斗弹段）。 */
     public static final int STREAM_DOGFIGHT = 1;
 
+    /**
+     * 「这一帧没有人被玩家指定」的槽号哨兵。它与 {@link Missiles.Missile#NO_TARGET} 同值但**不是同一个名词**：
+     * 那是弹上的锁，这里是敌池的槽号；混用会让"这枚弹没锁"和"没人被指定"读起来一模一样，
+     * 而后者是雷达屏的状态，与弹无关。
+     */
+    public static final int NO_DESIGNATED = -1;
+
     /** 按敌人 obj 槽号索引的占用戳。槽号 &lt; 本数组长度那条前提由 {@link #beginFrame} 当场断言。 */
     private final int[] occupiedStamp;
     private final int[] scanOut = new int[2];
     private final int stream;
     private int frame;
+    /**
+     * 玩家在雷达屏上指定的那一只（敌 obj 槽号），{@link #NO_DESIGNATED} = 没指定。
+     *
+     * <p>它**只被射前那一段读**（{@link #designatedForBind}，唯一读取点），也就是他逐字里的那条
+     * 「这个限制是一锁，不是发射后的二锁」：开眼之后 {@link #scanFoes} 照旧逐帧挑视场内最近的可锁者，
+     * 指定的那只若在飞行途中出了导引头视场，它会换锁——那是他的四段设计本体，不是漏掉的后门。
+     *
+     * <p>每帧由 {@link #beginFrame} 重新给，不做跨帧残留：与 {@code radarCos2} 那四个数同源的理由
+     * （全帧同一份、下一帧改了立刻生效），也顺带让「格斗流不读指定」结构性成立——{@code Game} 给
+     * 那个实例传的一直是 {@link #NO_DESIGNATED}，共用飞行层里因此**没有**一条按流别的分支。
+     */
+    private int designated = NO_DESIGNATED;
 
     /** 每帧从 spec 现算一次的四个数：省掉每枚弹各自两次三角一次除法，也保证全帧用同一份。 */
     private float radarCos2 = -1f;
@@ -202,12 +221,17 @@ public final class MissileBehavior {
      *             ⚠ 第四张（格斗导弹）在这里**没有任何读数**：它买的是一整个流与一个发射判据，
      *             自带的那组参数在 {@link Balance.Missile} 的 {@code dogfight*} 前缀里，买断后无级可叠
      *             （开关读 {@link ShopRun#dogfightOn()}，落点在 {@code Game} 的出弹处）
+     * @param designatedSlot 玩家本帧在雷达屏指定的敌 obj 槽号，无指定传 {@link #NO_DESIGNATED}。
+     *             ⚠ {@code Game} 给**格斗流**那个实例永远传 {@link #NO_DESIGNATED}（他 2026-10-03 逐字
+     *             「目标给普通导弹用，格斗弹不用」）——流别因此不进本类，共用飞行层里没有一条按流的分支
      */
-    public void beginFrame(Missiles missiles, Enemies foes, Balance.Missile spec, ShopRun run) {
+    public void beginFrame(Missiles missiles, Enemies foes, Balance.Missile spec, ShopRun run,
+                           int designatedSlot) {
         if (foes.capacity() != occupiedStamp.length) {
             throw new IllegalStateException("enemy capacity moved: pool " + foes.capacity()
                     + " but this behavior was built for " + occupiedStamp.length);
         }
+        this.designated = designatedSlot;
         frame++;
         if (frame == 0) {           // 2^32 帧一次：不清就会把上一轮的旧戳当成本帧的占用
             for (int i = 0; i < occupiedStamp.length; i++) occupiedStamp[i] = 0;
@@ -311,8 +335,31 @@ public final class MissileBehavior {
     }
 
     /**
-     * 把 {@link #tryLaunch} 挑出的那一只**装进**刚出膛的格斗弹：落锁 + 开眼，同一刻、不等下一帧。
+     * 射前那一段能不能用玩家指定的那一只。返回槽号＝压过锥内最近；返回 -1＝退回 {@link #scanFoes} 的旧口径。
      *
+     * <p>三条判据，从上到下依次是他 2026-10-03 的三条逐字：
+     * <ul>
+     *   <li>「死了即清空」——本帧就判，不靠 {@code Game} 那一侧的每帧校验（那里也判一次，是为了别把
+     *       死人的槽号画到屏上；这里再判一次是因为**占用戳与存活都是每帧的东西**，
+     *       一次从 UI 到弹体的传递路上没有一个数能保证还是新的）；</li>
+     *   <li>「这个限制是一锁」——**不看雷达锥**。指定唯一豁免的就是这一层的角度，越界、在机头正后方都照打；</li>
+     *   <li>一敌一锁的老规矩不让位：{@code occupiedStamp} 本帧已被别的弹占住时让开。他裁的是"指定压过
+     *       <b>取最近</b>"——那是扫描内部的优先级，不是"指定压过<b>别人的锁</b>"。</li>
+     * </ul>
+     *
+     * @param foes 本帧敌池，与 {@link #advance} 收到的是同一个实例
+     */
+    private int designatedForBind(Enemies foes) {
+        if (designated == NO_DESIGNATED) return NO_DESIGNATED;
+        Enemies.Enemy e = foes.objAt(designated);
+        // 三条判据是 Enemies#isLive 那条注释里写明的"目标仍有效"完整口径，缺一条都会把已摘表的槽读成活着。
+        if (!foes.isLive(designated) || e == null || e.hp <= 0) return NO_DESIGNATED;
+        if (occupiedStamp[designated] == frame) return NO_DESIGNATED;
+        return designated;
+    }
+
+    /**
+     * 把 {@link #tryLaunch} 挑出的那一只**装进**刚出膛的格斗弹：落锁 + 开眼，同一刻、不等下一帧。
      * <p>为什么要有这个方法，而不是让弹带着 {@code RADAR_PENDING} 出膛、由 {@link #advance} 自己补锁：
      * 他那三条口径合起来把"补锁"这条路判死了——
      * <ul>
@@ -413,7 +460,10 @@ public final class MissileBehavior {
             }
             m.targetSlot = Missiles.Missile.NO_TARGET;
             scanFoes(m, foes, 0f, -1f, true, radarCos2, spec, Float.POSITIVE_INFINITY);
-            int slot = scanOut[OUT_PICKED];
+            // 玩家指定的那只**压过**锥内最近（他 2026-10-03 逐字「压过取最近」）；给不出可用目标时
+            // 退回上面那一条扫描，而不是"这枚弹就不打了"——指定是偏好，不是命令。
+            int slot = designatedForBind(foes);
+            if (slot < 0) slot = scanOut[OUT_PICKED];
             if (slot >= 0) {
                 Enemies.Enemy bound = foes.objAt(slot);
                 bind(m, bound, spec, dt);

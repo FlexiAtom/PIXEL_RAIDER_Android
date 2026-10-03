@@ -70,6 +70,30 @@ public final class HudLayout {
     public static final int MAIN_BAR_H = 6;
     public static final int SUB_BAR_H = 4;
 
+    // ---- 行2 右侧：雷达屏（「雷达锁定」卡的读数面，2026-10-03）--------------------------------
+    //
+    // 用户逐字「在生命、护盾、过载和敌人那些条的**右侧**，放雷达屏幕（半透明绿色正方形，带有网格…)」。
+    // 位置与"正方形"两件事都在那句话里；边长不在，所以它是我挑的，挑法见下。
+    //
+    // **48 不是凑的数**：它同时是 行2 的整高（BAR_PITCH×BAR_ROWS = 12×4）与行2 之下的竖向净空
+    // （ROW2_BOTTOM − ROW2_TOP = 48）。取任何一个更大的数都会顶到行3 的胶囊（ROW3_TOP = 72），
+    // 那就不是"改一个常量"而是搬两行已经测过的几何（升档方案与代价见池件
+    // {@code working/radar-screen-target-select.md} 的几何两档）。
+    //
+    // 横边：2026-10-03 他真机看过之后裁「位置不合适，建议靠屏幕右侧，目前是中线上」。原档取的是
+    // BAR_RIGHT + 4 = 124，右缘 172 —— 那块 48 格的方块**跨过 LOGIC_W 的中线 120**，所以他读成"中线上"。
+    // 现在整块右推到**与暂停键、帧数面板同一条右缘**（PAUSE_RIGHT = 232）：右对齐的数本仓只有一条，
+    // 雷达不该自立第二条。左侧腾出的 120..184 那段空地不是浪费——行2 那四条本来就该有自己的呼吸。
+    //
+    // 推到 232 仍然零碰撞，理由与旧档同一条但换了对手：雷达占 y 22..70，而右侧那两块的 y 是
+    // 行3 胶囊 72..82、行4 帧数面板 84..98（x 186..232）、Boss 条 100..121 —— **全在 y 70 之下**；
+    // 上方行1 暂停键只到 y 16。所以横竖都不叠，唯一被盖住的是战场右上那条空地（HUD 本来就是覆层）。
+    public static final int RADAR_SIDE = BAR_PITCH * BAR_ROWS;                 // 48
+    public static final int RADAR_RIGHT = PAUSE_RIGHT;                         // 232
+    public static final int RADAR_LEFT = RADAR_RIGHT - RADAR_SIDE;             // 184
+    public static final int RADAR_TOP = ROW2_TOP;                               // 22
+    public static final int RADAR_BOTTOM = RADAR_TOP + RADAR_SIDE;              // 70 = ROW2_BOTTOM
+
     // ---- 行3：状态效果胶囊（环形消退，无秒数） ------------------------------------------------
     public static final int ROW3_TOP = ROW2_BOTTOM + 2;                      // 72
     public static final int CAP_RIGHT = 215;
@@ -141,6 +165,17 @@ public final class HudLayout {
 
     public static void bossBarRect(RectI out) {
         out.set(BOSS_LEFT, BOSS_TOP, BOSS_RIGHT, BOSS_BOTTOM);
+    }
+
+    /**
+     * 雷达屏方块，**HUD 相对坐标**（与暂停键、炸弹键同一套口径：绘制端在 {@code hudTop} 平移组里，
+     * 命中端另加偏移）。绘制与命中读同一个矩形，这条是本仓防"点不中的按钮"的通用做法。
+     *
+     * <p>这块矩形**只有在买了「雷达锁定」之后才存在**——那句是他的逐字（「块屏是雷达锁定那张卡的商品」），
+     * 闸门在 {@code ShopRun.radarOn()}，绘制端与命中端**共用那一个谓词**，不许各读一次等级。
+     */
+    public static void radarRect(RectI out) {
+        out.set(RADAR_LEFT, RADAR_TOP, RADAR_RIGHT, RADAR_BOTTOM);
     }
 
     // ---- 炸弹按钮（战斗区右下角）-------------------------------------------------------------

@@ -65,6 +65,8 @@ public final class MainActivity extends ComponentActivity {
         super.onCreate(savedInstanceState);
         debugKeys = (getApplicationInfo().flags
                 & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        // 同一个闸门喂给 Game：暂停页那枚「调试」入口只在 debug 构建画得出、受理得了（surface 之后才建，这里先落地）
+        game.setDebugBuild(debugKeys);
         // 落盘出口必须在渲染线程能碰到 Game 之前挂上：surface 是后面才建的，但一旦建起来就是它先动
         store = new AsyncKeyValue(new SharedPrefs(
                 getSharedPreferences("pixel_raider", Context.MODE_PRIVATE)));

@@ -64,6 +64,13 @@ public final class PauseLayout {
      * 68 这一格在 12px 汉字下是**五字封顶**，这一行最长的标签是「升级商店」四字。
      */
     public static final int SECONDARY_COLS = 3;
+    /**
+     * debug 构建下第二行挤成四格（商店／成就／设置／调试）。四格同样整除：内容列宽 212 =
+     * {@code 4×50 + 3×4}，50 这一格仍装得下「升级商店」四字（48px），所以摘掉调试格后
+     * 正式包的三格版面（68 每格）与这里（50 每格）都各自居中不上偏——两档都由
+     * {@link #SECONDARY_COLS}／本常量派生，不存在写死的第四格坐标。
+     */
+    public static final int SECONDARY_COLS_DEBUG = 4;
     /** 主操作占内容宽的 76%（规格 §四）。 */
     public static final float PRIMARY_W_RATIO = 0.76f;
 
@@ -100,18 +107,26 @@ public final class PauseLayout {
     public final RectI shop = new RectI();
     public final RectI achievements = new RectI();
     public final RectI settings = new RectI();
+    /** 调试入口格：只在 debug 构建占位；正式包里它是空矩形（{@code contains} 恒假）。 */
+    public final RectI debug = new RectI();
     public final RectI restart = new RectI();
     public final RectI menu = new RectI();
 
     public int contentLeft, contentRight, contentWidth;
     public int chartHeight;
 
+    /** 正式包口径：第二行三格（等价于 {@code layout(logicH, safeTop, safeBottom, false)}）。 */
+    public void layout(int logicH, int safeTop, int safeBottom) {
+        layout(logicH, safeTop, safeBottom, false);
+    }
+
     /**
      * @param logicH     当前逻辑画布高（320~{@link Screen#LOGIC_H_MAX}，来自 {@link Screen.Metrics#logicH}）
      * @param safeTop    顶部安全区内缩，逻辑 px（{@link Screen.Metrics#safeTop}）——面板不再压进挖孔带
      * @param safeBottom 底部安全区内缩，逻辑 px
+     * @param debugBuild 是否 debug 构建：true 时第二行挤成四格多摆一枚「调试」入口，正式包维持三格
      */
-    public void layout(int logicH, int safeTop, int safeBottom) {
+    public void layout(int logicH, int safeTop, int safeBottom, boolean debugBuild) {
         int h = logicH <= 0 ? Screen.BATTLE_H : logicH;
         panel.set(LEFT, safeTop + PANEL_GAP, RIGHT, h - safeBottom - PANEL_GAP);
         contentLeft = LEFT + BORDER + PAD;
@@ -132,11 +147,12 @@ public final class PauseLayout {
         int row1Bottom = row2Top - ROW_GAP;
         int row1Top = row1Bottom - ROW_PRIMARY_H;
         Widgets.equalHalves(contentLeft, row3Top, contentWidth, ROW_H, BUTTON_GAP, restart, menu);
-        for (int i = 0; i < SECONDARY_COLS; i++) {
-            RectI out = i == 0 ? shop : i == 1 ? achievements : settings;
-            Widgets.gridCell(contentLeft, row2Top, contentWidth, ROW_H,
-                    SECONDARY_COLS, 1, CELL_GAP, i, out);
+        int cols = debugBuild ? SECONDARY_COLS_DEBUG : SECONDARY_COLS;
+        for (int i = 0; i < cols; i++) {
+            RectI out = i == 0 ? shop : i == 1 ? achievements : i == 2 ? settings : debug;
+            Widgets.gridCell(contentLeft, row2Top, contentWidth, ROW_H, cols, 1, CELL_GAP, i, out);
         }
+        if (!debugBuild) debug.set(0, 0, 0, 0);   // 空矩形：contains 恒假，正式包里这一格压根不存在
         int pw = primaryWidth();
         int px = contentLeft + (contentWidth - pw) / 2;
         resume.set(px, row1Top, px + pw, row1Bottom);

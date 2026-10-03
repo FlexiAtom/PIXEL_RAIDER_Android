@@ -126,9 +126,41 @@ public class HudLayoutTest {
         assertTrue("胶囊越出画布左边", B.left >= 0);
     }
 
+    /**
+     * 雷达屏右对齐到**本仓唯一那条 HUD 右缘**，且与它下方那三块零碰撞。
+     *
+     * <p>2026-10-03 他真机看过裁「位置不合适，建议靠屏幕右侧，目前是中线上」——原档取
+     * {@code BAR_RIGHT + 4 = 124}，那块 48 格的方块跨过 {@code LOGIC_W} 的中线 120，所以他读成
+     * "中线上"。这条钉三件事，少钉一件都可能被后来的"顺手调整"改回去而无人发现：
+     * <ul>
+     *   <li>右缘 = 暂停键右缘 = 帧数面板右缘（232）。右对齐的数本仓只该有一条。</li>
+     *   <li>左缘 184 必须在状态条列（右界 120）之右——他那句逐字是"那些条的**右侧**"。</li>
+     *   <li>纵向 y 22..70 不许咬到行3 胶囊 / 行4 帧数面板 / Boss 条：右推之后这三块正好在它下面，
+     *       以前靠左时它们横着就错开了，现在只有 y 这一维在挡。</li>
+     * </ul>
+     */
     @Test
-    public void fillWidthClampsOutOfRange() {
-        assertEquals(0, HudLayout.fillWidth(0f));
+    public void radarRightAlignsToTheOneHudMarginAndClearsEverythingBelow() {
+        HudLayout.radarRect(A);
+        assertEquals(232, A.right);
+        assertEquals(HudLayout.PAUSE_RIGHT, A.right);
+        assertEquals(HudLayout.FPS_RIGHT, A.right);
+        assertEquals(184, A.left);
+        assertTrue("雷达越到状态条那一列上了", A.left > HudLayout.BAR_RIGHT);
+        assertEquals(HudLayout.RADAR_SIDE, A.width());
+        assertEquals(HudLayout.RADAR_SIDE, A.height());
+        assertTrue("正方形不方 ⇒ 战场会被各向异性压扁成两条不同的读数", A.width() == A.height());
+        // 上方：行1 只到 16；下方：胶囊 72、帧数面板 84、Boss 条 100 起
+        assertTrue(A.top >= HudLayout.ROW1_BOTTOM);
+        assertTrue("压到行3 胶囊", A.bottom <= HudLayout.ROW3_TOP);
+        assertTrue("压到帧数面板", A.bottom <= HudLayout.FPS_TOP);
+        assertTrue("压到 Boss 名", A.bottom <= HudLayout.BOSS_LABEL_TOP);
+        // 不许越出画布（右缘 232 距 240 只留 8 格，与暂停键同一条边距）
+        assertTrue(A.right <= HudLayout.W);
+    }
+
+    @Test
+    public void fillWidthClampsOutOfRange() {        assertEquals(0, HudLayout.fillWidth(0f));
         assertEquals(44, HudLayout.fillWidth(0.5f));
         assertEquals(88, HudLayout.fillWidth(1f));
         assertEquals(0, HudLayout.fillWidth(-3f));
