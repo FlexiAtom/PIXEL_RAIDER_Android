@@ -319,8 +319,9 @@ public final class WarheadRules {
      * 生出亮线：中心 = 弹位，速度 = **弹的速度全额继承 ＋ {@code rodEjectSpeed} 沿弹轴**
      * （伽利略叠加，不是倍乘——他 L41661「战斗部是伤害，弹速是弹速…这不就是在运动的小车上丢出
      * 一个小球，属于直线减速问题」，本轮补的数见 {@link Balance.Missile#rodEjectSpeed}），
-     * 伤害 = {@link WeaponFire#damageOf(float)}（与非制导弹**同一个函数**，不在这儿抄第二份
-     * {@code max(1, round)}），{@code crit} 从弹透传（分数走它，伤害里没烘）。
+     * 伤害 = {@link DamageRules#resolve} 走 {@link DamageRules#SRC_ROD} 那一档（与非制导弹**同一个
+     * 出口**，不在这儿抄第二份取整与下限；源不同是因为它**能打的护甲**与机炮弹不同，见
+     * {@link DamageRules#SRC_DOGFIGHT_BODY} 那条），{@code crit} 从弹透传（分数走它，伤害里没烘）。
      *
      * <p>⚠ 叠加而不是倍乘有个可见的后果：杆从一开始就带着弹的巡航速度（B3 后 960px/s），
      *   每步 16px——判据因此必须按**扫掠带**算，否则这根快杆反而比慢杆更漏判。见
@@ -347,7 +348,7 @@ public final class WarheadRules {
             w.vx += m.vx * k;
             w.vy += m.vy * k;
         }
-        w.damage = WeaponFire.damageOf(m.damage);
+        w.damage = DamageRules.resolve(DamageRules.SRC_ROD, DamageRules.ARMOR_NONE, m.damage);
         w.size = m.size;
         w.color = m.color;
         w.crit = m.crit;
@@ -423,10 +424,14 @@ public final class WarheadRules {
      * 2026-09-25 17:19:51）⇒ **向下取整、最小 1** 也是他的字面，不是我替自己加的保险。
      * 方案里编号 R9（导弹仿真本体）只是索引。
      *
+     * <p>两条现在分住在两处，各归各的真源：「向下取整」就是这里那个**整数除法**（{@code int / 4}
+     * 对正数即 floor），不能改写成浮点再交给 {@code resolve} 去 round——那会把 {@code 10/4} 从 2
+     * 变成 3，而 {@code Math.round} 是"五入"、他的字面是"向下"。「最小 1」则并进
+     * {@link DamageRules#resolve} 的下限（{@code SRC_SHARD} 那一档 = 1），不再在本函数抄第二份。
+     *
      * <p>从杆的整数值派生、不是第三个伤害来源：这条结构约束是我的记账，他没有说过。
      */
     public static int shardDamage(int rodDamage) {
-        int d = rodDamage / 4;
-        return d < 1 ? 1 : d;
+        return DamageRules.resolve(DamageRules.SRC_SHARD, DamageRules.ARMOR_NONE, rodDamage / 4);
     }
 }

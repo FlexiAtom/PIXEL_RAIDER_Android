@@ -495,7 +495,8 @@ public final class WarheadRulesTest {
         Warheads.Warhead rod = WarheadRules.spawnRod(pool, m, Balance.missile);
         assertNotNull(rod);
         assertTrue("rod 没继承弹的 crit", rod.crit);
-        assertEquals(WeaponFire.damageOf(m.damage), rod.damage);
+        assertEquals("杆在生出那一刻就过 SRC_ROD 档结算（6.9 → 7）：此后每 tick 不再取整",
+                7, rod.damage);
         assertEquals(m.size, rod.size, 0f);
         // 全额继承 ＋ 抛出项沿弹轴（叠加，不是倍乘）：-240 的弹 ⇒ 杆 -240-1
         assertEquals(-240f - Balance.missile.rodEjectSpeed, rod.vy, 1e-3f);

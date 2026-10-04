@@ -56,7 +56,8 @@ public final class WeaponFire {
     public static final class Template {
         /** 弹速（像素/秒），已含弹速修正。 */
         public float speedPx;
-        /** 已含攻击乘子、固定加伤与暴击倍率的最终伤害（结算端仍走 {@link #damageOf} 取整）。 */
+        /** 已含攻击乘子、固定加伤与暴击倍率的最终伤害（结算端过 {@code DamageRules.resolve} 取整：
+         *  直飞弹走 {@code SRC_SHOT}，仿真弹走它自己的那一档）。 */
         public float damage;
         public float size;
         public float maxLife;
@@ -193,19 +194,20 @@ public final class WeaponFire {
     }
 
     /**
-     * 伤害结算：取整，至少 1。暴击 ×2 在出膛那一刻已经乘进 {@code damage}，这里只做浮点→整数。
+     * 玩家弹那一侧的结算：打折、取整、下限全在 {@link DamageRules#resolve}，本函数不额外做任何决定。
      *
-     * <p>参数是**裸浮点**而不是 {@code Bullet}：玩家弹、连续杆亮线、碎片三处结算必须走同一个函数。
-     * 签名只吃 {@code Bullet} 的旧版本让战斗部拿不到它，于是 {@code max(1, round(d))} 会被抄第二份
-     * ——那正是本仓立规要防的第二个真源（复核 DA-4）。
+     * <p>暴击 ×2 在出膛那一刻已经乘进 {@code damage}（{@link #fillTemplate}），这里只做浮点→整数，
+     * 所以它是"结算"而不是第二次算伤。
+     *
+     * <p>2026-10-04 伤害系统重做·档二删掉了它的裸浮点同胞 {@code damageOf(float)}：那一个被机炮弹、
+     * 导弹弹体、连续杆三处共用，而这三处**能打的护甲并不相同**（他 2026-10-03 裁的是"仅格斗弹"）。
+     * 把源烘进一个函数，就等于让"这一档打子弹护甲几折"在这里没有答案可给——于是每个源改在自己
+     * 的结算点报身份（{@link DamageRules#SRC_SHOT}／{@code SRC_MISSILE_BODY}／{@code SRC_ROD}…）。
+     *
+     * <p>⚠ 第二参数写死 {@link DamageRules#ARMOR_NONE} 是**今天的真话**（场上没有带护甲的目标）。
+     * 带护甲的东西一出现，结算就得挪到**已经知道被打的是谁**的那一句上去，不能在这里猜。
      */
-    public static int damageOf(float damage) {
-        int d = Math.round(damage);
-        return d < 1 ? 1 : d;
-    }
-
-    /** 玩家弹那一侧的糖：口径完全在 {@link #damageOf(float)}，本函数不额外做任何决定。 */
     public static int damageOf(BulletPool.Bullet b) {
-        return damageOf(b.damage);
+        return DamageRules.resolve(DamageRules.SRC_SHOT, DamageRules.ARMOR_NONE, b.damage);
     }
 }

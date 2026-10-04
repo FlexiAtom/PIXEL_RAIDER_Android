@@ -114,8 +114,6 @@ public final class Balance {
         public float trailPerSec = 2.0f;                // [可调] 命中半径（逻辑像素）
         public int startCoins = 0;
         public int startBombs = 1;               // [可调] 起始带一枚，让"炸弹入栏"立刻可体验
-        /** [可调] 炸弹"重伤全场"扣的是**生命上限**的比例，不是固定伤害（规格 §掉落物）。 */
-        public float bombHpRatio = 0.5f;
         /**
          * [可调] 触屏拖动的欠账上限（秒）：手指位移先记账，战机按限速逐帧消费，最多欠这么多。
          *
@@ -126,7 +124,14 @@ public final class Balance {
 
     // ---- 碰撞伤害 -----------------------------------------------------------------
 
-    /** [规格] 撞机类随最大生命缩放（比例），子弹类固定点数。 */
+    /**
+     * [规格] 撞机类随最大生命缩放（比例），子弹类固定点数。
+     *
+     * <p>这一张表是**所有伤害基准值**的唯一住处（2026-10-04 伤害系统重做·档二）：原先炸弹的比例
+     * 住在 {@link Player}、超载的扫描值住在 {@link Overload}，于是"改一处伤害要看三张表"。
+     * 移进来的是**数值**，不是能力——{@code cooldownSec}/{@code sweepSec} 那类仍然留在各自的
+     * 能力块里，它们不是伤害。结算（打折、取整、下限）在 {@code DamageRules.resolve}，这里只有基准。
+     */
     public static final class Damage {
         public float gruntHitRatio = 0.50f;
         public float bursterHitRatio = 0.60f;    // 自爆怪贴脸
@@ -134,6 +139,9 @@ public final class Balance {
         public int bossBullet = 20;
         public int gruntBullet = 12;
         public int contactFloor = 1;             // [推导] 保证任何比例下都掉血，避免 0 伤
+        /** [可调] 炸弹"重伤全场"扣的是**被打那一只生命上限**的比例，不是固定伤害（规格 §掉落物）。 */
+        public float bombHpRatio = 0.5f;
+        public int sweepDamage = 45;             // [可调] 全屏扫描式清场的伤害
     }
 
     // ---- 超载 ---------------------------------------------------------------------
@@ -141,7 +149,6 @@ public final class Balance {
     /** [规格] 冷却制 30 秒，不是击杀蓄能制——蓄能制下玩家无法规划。 */
     public static final class Overload {
         public float cooldownSec = 30f;
-        public int sweepDamage = 45;             // [可调] 全屏扫描式清场的伤害
         public float sweepSec = 0.5f;            // [可调] 扫描持续
         /** [规格] hit-stop：重击时世界定格 30~50ms，但震屏继续衰减。 */
         public float hitStopMin = 0.030f;
@@ -815,7 +822,7 @@ public final class Balance {
          *
          * <p>⚠ <b>归属分两半</b>：「取消百分比」「改为固定的+1」「取消上限」三个动作是他的字；
          * 而下面这段<b>为什么</b>取消是我的推导，他没有给过理由——那个百分比活不到结算里：伤害按发
-         * 取整（{@code WeaponFire.damageOf}），激光基础 1 点，十级叠满也只有 1.2 → 四舍五入仍是
+         * 取整（{@code DamageRules.resolve} 的 {@code SRC_SHOT} 档），激光基础 1 点，十级叠满也只有 1.2 → 四舍五入仍是
          * 1 点，卡面写了收益而场上纹丝不动。定值 +1 走加法，买一级就每发多掉一格血，玩家能立刻看见。
          */
         public int damageFlatPerLevel = 1;
@@ -934,7 +941,7 @@ public final class Balance {
          * （这一发炸开算不算一片），不是量，买过之后由满级闸门自动下架。
          *
          * <p>⚠ 这张卡**不改任何伤害数值**：杆本体与未买卡时的弹体撞击共用同一个数
-         * （{@code WeaponFire.damageOf(m.damage)}），买下去换来的是"一次能打几只"。
+         * （都读 {@code m.damage}，各自过 {@code SRC_ROD}／弹体撞击那一档），买下去换来的是"一次能打几只"。
          * 那是他裁定「新增『连续杆』卡，未买靠撞击」在我这儿唯一不撒谎的写法——若同时抬伤害，
          * 卡面就变成"更疼＋更大范围"两件事，而他只裁了范围那一件。
          */

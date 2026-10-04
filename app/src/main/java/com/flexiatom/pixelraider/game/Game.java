@@ -1546,6 +1546,12 @@ public final class Game implements GameThread.Host {
     private void stepPool(Missiles pool, MissileBehavior behavior, float dt, int designated) {
         Balance.Missile spec = Balance.missile;
         behavior.beginFrame(pool, enemies, spec, shopRun, designated);
+        // 弹体撞击档的**伤害源身份**：两流的分别住在池上（见 {@link MissileBehavior#STREAM_DOGFIGHT}
+        // 那条"为什么不挂布尔到弹身"的理由），所以这里按"这一池是哪一流"解析一次，不按枚解析。
+        // 它今天还不改变任何数字（场上没有带子弹护甲的目标），但身份必须在结算点就拿得到，
+        // 否则将来格斗弹打敌弹那一格要回头补第二套判据。
+        final int bodySource = behavior.stream() == MissileBehavior.STREAM_DOGFIGHT
+                ? DamageRules.SRC_DOGFIGHT_BODY : DamageRules.SRC_MISSILE_BODY;
         for (int i = pool.activeCount() - 1; i >= 0; i--) {
             Missiles.Missile m = pool.activeAt(i);
             int flags = behavior.advance(m, spec, dt, enemies,
@@ -1555,10 +1561,10 @@ public final class Game implements GameThread.Host {
             // ⇒ 选这一档是他的决定，但这句标签是我的措辞。三路合流后差别只在**记账**——撞敌/引信算这一发
             // 命中，空视场自爆不算；这条记账口径是我定的，他没谈过命中怎么算。
             if ((flags & MissileBehavior.FLAG_DETONATE) != 0) {
-                detonateMissile(m, true, behavior.fusedSlot());
+                detonateMissile(m, true, behavior.fusedSlot(), bodySource);
             } else if ((flags & MissileBehavior.FLAG_SELF_DESTRUCT) != 0) {
                 // 自爆这一路必然没撞到人（引信那一句排在它前面，撞到了就走上面那条），所以槽号给 -1
-                detonateMissile(m, false, -1);
+                detonateMissile(m, false, -1, bodySource);
             }
             if (MissileBehavior.isRetired(flags)) pool.killAt(i);
         }
@@ -1621,7 +1627,8 @@ public final class Game implements GameThread.Host {
      * 作废的是我旧注释里那句"弹体本身不造成伤害"——那句本来就是<b>我</b>把他那两档措辞补成的互斥口径
      * （他没谈过弹体）。现在没买卡时弹体确实造成伤害，判据钉在 {@link WarheadRules} 那张真值表里。
      *
-     * <p>杆与撞击**共用同一个伤害数值**（都走 {@link WeaponFire#damageOf(float)} 读 {@code m.damage}）：
+     * <p>杆与撞击**共用同一个伤害数值**（都是 {@link DamageRules#resolve} 读 {@code m.damage}，
+     * 各自走 {@code SRC_ROD}／{@code SRC_MISSILE_BODY} 那一档）：
      * 卡买的是"这一发炸开成一条线、顺带碎片"，不是"这一发更疼"。所以单只敌人吃到的总伤害不因买卡而变，
      * 变的是**一次能打几只**。
      *
@@ -1630,13 +1637,14 @@ public final class Game implements GameThread.Host {
      * ⇒ 少一根杆，玩家看不出来，但 {@link Warheads#refuseTotal()} 会记账（"看不出来的截断"和
      * "静默的截断"不是一回事）。
      */
-    private void detonateMissile(Missiles.Missile m, boolean countsAsHit, int fusedSlot) {
+    private void detonateMissile(Missiles.Missile m, boolean countsAsHit, int fusedSlot,
+                                 int bodySource) {
         if (countsAsHit) stats.addHit();
         int route = WarheadRules.detonationRoute(shopRun.rodOn(), fusedSlot);
         if (route == WarheadRules.ROUTE_ROD) {
             WarheadRules.spawnRod(warheads, m, Balance.missile);
         } else if (route == WarheadRules.ROUTE_IMPACT) {
-            settleImpact(m, fusedSlot);
+            settleImpact(m, fusedSlot, bodySource);
         }
         spawnBurst(m.x, m.y, 12, m.color);
         shake = Math.max(shake, 0.45f);
@@ -1654,11 +1662,15 @@ public final class Game implements GameThread.Host {
      *
      * <p>三条动作照 {@link #settleContact} 那套抄：判 null、判 {@code hp <= 0}（同一步里可能已经
      * 被别的结算打死，摘表要到 {@link #reapDead}）、打死者走 {@link #killEnemy}（不接就无分数无掉落）。
+     *
+     * <p>{@code bodySource} 是"这一发是哪一流的弹体"（{@link DamageRules#SRC_MISSILE_BODY} 或
+     * {@link DamageRules#SRC_DOGFIGHT_BODY}），由 {@link #stepPool} 按池给出——不在这里猜，
+     * 弹身上没有流别字段，那是 {@link MissileBehavior} 明确不要的东西。
      */
-    private void settleImpact(Missiles.Missile m, int slot) {
+    private void settleImpact(Missiles.Missile m, int slot, int bodySource) {
         Enemies.Enemy e = enemies.objAt(slot);
         if (e == null || e.hp <= 0) return;
-        e.hp -= WeaponFire.damageOf(m.damage);
+        e.hp -= DamageRules.resolve(bodySource, DamageRules.ARMOR_NONE, m.damage);
         e.hitFlash = 0.09f;
         if (e.hp <= 0) killEnemy(e, m.crit);
     }
@@ -1722,9 +1734,15 @@ public final class Game implements GameThread.Host {
      *       一次引爆六片碎片从同一点喷出，最坏多记 5 次击杀与 5 份掉落。</li>
      * </ol>
      *
-     * <p>伤害读 {@link Warheads.Warhead#damage} 这个**已经取整的 int**：出膛那刻走过
-     * {@code WeaponFire.damageOf(float)}，碎片值由 {@code WarheadRules.shardDamage} 从杆值派生，
+     * <p>伤害读 {@link Warheads.Warhead#damage} 这个**已经取整的 int**：杆在 {@code WarheadRules.spawnRod}
+     * 里走过 {@link DamageRules#resolve} 的 {@code SRC_ROD} 那一档，碎片值由
+     * {@code WarheadRules.shardDamage} 从杆值派生（{@code SRC_SHARD} 档），
      * 这里不再取第二次整——那是第三个真源。
+     *
+     * <p>⚠ 代价要说清楚：战斗部的**档位定在生成那一刻**，所以"这一根杆打在带护甲的东西上"这件事
+     * 在这里问不出来（目标此刻还不存在，一个 tick 里它可能碰到好几只）。今天没有带护甲的目标，
+     * 这句话不成立也不影响任何数字；等 #67「对弹机制」让战斗部也能打敌弹时，护甲要么在这条链上
+     * 重新解析，要么由那张表把杆与碎片一并裁成打不穿——两条都比现在抄一份强。
      */
     private void settleContact(Warheads.Warhead w) {
         int mask = WarheadRules.takeContact(w);
@@ -1787,7 +1805,10 @@ public final class Game implements GameThread.Host {
             float dx = b.x - player.x, dy = b.y - player.y;
             if (dx * dx + dy * dy > rr * rr) continue;
             hostile.killAt(i);
-            hurtPlayer((int) b.damage, false);
+            // 基准点数是出膛时写死的整数（12/20），过这一档结算今天等于原样，但"打折"这一层
+            // 从此只有 resolve 一个出口——将来玩家侧若挂上护甲，也在这同一格里读。
+            hurtPlayer(DamageRules.resolve(DamageRules.SRC_ENEMY_BULLET,
+                    DamageRules.ARMOR_NONE, b.damage), false);
             if (!player.alive || player.invulnerable()) return;   // 一次受伤只算一发：无敌帧生效了
         }
     }
@@ -2043,7 +2064,7 @@ public final class Game implements GameThread.Host {
         for (int i = enemies.activeCount() - 1; i >= 0; i--) {
             Enemies.Enemy e = enemies.activeAt(i);
             if (e.hp <= 0) continue;
-            e.hp -= Math.max(1, Math.round(e.maxHp * Balance.player.bombHpRatio));
+            e.hp -= DamageRules.bombDamage(e.maxHp);
             e.hitFlash = 0.12f;
             if (e.hp <= 0) killEnemy(e, false);
         }

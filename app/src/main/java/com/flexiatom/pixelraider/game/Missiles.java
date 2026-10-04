@@ -78,7 +78,7 @@ public final class Missiles {
         /** 导引头**连续**空视场的时长（秒）。只在 {@link #seekerOpen} 之后累加，锁到目标即归零。 */
         public float seekT;
         public int phase;
-        /** 出膛那一刻已含攻击乘子、火力卡定值与暴击 ×2；结算端仍走 {@code WeaponFire.damageOf} 取整。 */
+        /** 出膛那一刻已含攻击乘子、火力卡定值与暴击 ×2；结算端走 {@code DamageRules.resolve}（弹体撞击那一档）取整。 */
         public float damage;
         /** ⚠ 必须有：伤害里烘了 ×2，**分数没烘**（{@code killEnemy} 的 critKillMul 走这个布尔）。 */
         public boolean crit;

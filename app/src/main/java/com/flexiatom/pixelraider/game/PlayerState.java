@@ -99,6 +99,11 @@ public final class PlayerState {
      */
     public int hurt(int rawDamage, float takenMul) {
         if (!alive || invuln > 0f) return FLAG_NONE;
+        // 0 点不是"一次没打中的受击"。它由 DamageRules 的 MUL 表造出来：mul<=0 时 resolve 还 0、
+        // 故意不吃下限，那是"百分之 0 护甲"的唯一表达。而 applyToPlayer 要过的 scaleTaken 有
+        // contactFloor=1，抬回去就变成"百分百挡下 = 掉 1 血 + 白给 0.7 秒无敌 + 全套受击特效"。
+        // 今天没有任何调用方传 0，这条接缝是给护甲接线那天留的，不是防御性摆设。
+        if (rawDamage <= 0) return FLAG_NONE;
         DamageRules.applyToPlayer(shield, hp, rawDamage, takenMul, scratch);
         shield = scratch[0];
         hp = scratch[1];

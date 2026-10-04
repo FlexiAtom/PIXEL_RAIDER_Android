@@ -57,7 +57,8 @@ public final class Warheads {
         public float px, py;
         public float vx, vy;
         /**
-         * 本格的**完整伤害**（点/次结算）。出膛那一刻已经过 {@code WeaponFire.damageOf} 取整，
+         * 本格的**完整伤害**（点/次结算）。杆在生出那一刻已经过 {@code DamageRules.resolve} 的
+         * {@code SRC_ROD} 档取整，
          * 碎片则由 {@link WarheadRules#shardDamage} 从杆值派生——**不是**第三个来源。
          */
         public int damage;

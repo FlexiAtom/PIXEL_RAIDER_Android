@@ -301,6 +301,34 @@ public class EntitiesTest {
         assertEquals(0, p.hurt(50, 1f));
     }
 
+    /**
+     * 0 点不是受击：不掉血、不给无敌、不置任何旗标。
+     *
+     * <p>这条钉的是 {@code PlayerState.hurt} 里那道 0 点守卫，而守卫是档二那张「源 × 护甲」表造出来的
+     * 接缝：{@code DamageRules.resolve} 见倍率 ≤0 时**故意**返回 0（不吃下限），可下面的
+     * {@code applyToPlayer} 要过 {@code scaleTaken}，那里有 {@code contactFloor=1} 会把它抬回去。
+     * 少了这道守卫，将来护甲一接线就得到"百分之百挡下 = 掉 1 血 + 白给 0.7 秒无敌 + 全套受击特效"，
+     * 而 {@code hurtPlayer} 只看旗标决定要不要播特效，那时特效也会一起白播。
+     *
+     * <p>今天没有调用方传 0（无护甲列恒 1.0，攻击侧下限恒 ≥1），所以这条测的是**接缝本身**而不是现状。
+     */
+    @Test
+    public void zeroDamageIsNotAHit() {
+        PlayerState p = newPlayer();
+        assertEquals(PlayerState.FLAG_NONE, p.hurt(0, 1f));
+        assertEquals(100, p.hp);
+        assertEquals(100, p.shield);
+        assertFalse("0 点不该换来无敌", p.invulnerable());
+
+        p.shield = 0;
+        assertEquals(PlayerState.FLAG_NONE, p.hurt(0, 2f));
+        assertEquals(100, p.hp);
+
+        p.hp = 1;
+        assertEquals("0 点连「打死」都不算", PlayerState.FLAG_NONE, p.hurt(0, 1f));
+        assertTrue(p.alive);
+    }
+
     @Test
     public void overfullHealConvertsIntoShield() {
         PlayerState p = newPlayer();
