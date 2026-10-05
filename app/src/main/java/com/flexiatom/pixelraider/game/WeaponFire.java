@@ -200,14 +200,16 @@ public final class WeaponFire {
      * 所以它是"结算"而不是第二次算伤。
      *
      * <p>2026-10-04 伤害系统重做·档二删掉了它的裸浮点同胞 {@code damageOf(float)}：那一个被机炮弹、
-     * 导弹弹体、连续杆三处共用，而这三处**能打的护甲并不相同**（他 2026-10-03 裁的是"仅格斗弹"）。
+     * 导弹弹体、连续杆三处共用，而这三处**能打的护甲并不相同**（他 2026-10-04 裁的是"仅格斗弹"）。
      * 把源烘进一个函数，就等于让"这一档打子弹护甲几折"在这里没有答案可给——于是每个源改在自己
      * 的结算点报身份（{@link DamageRules#SRC_SHOT}／{@code SRC_MISSILE_BODY}／{@code SRC_ROD}…）。
      *
-     * <p>⚠ 第二参数写死 {@link DamageRules#ARMOR_NONE} 是**今天的真话**（场上没有带护甲的目标）。
-     * 带护甲的东西一出现，结算就得挪到**已经知道被打的是谁**的那一句上去，不能在这里猜。
+     * <p>⚠ 第二参数写死 {@link DamageRules#ARMOR_REGULAR} 是**今天的真话但不是永久的真话**：
+     * 他裁「普通护甲目前是除子弹外的所有」，所以玩家弹今天打的每只怪都穿这一型（恒等列、必然全额）。
+     * 一旦子弹有了血量（#67），机炮就可能打在**子弹护甲**上——那时结算必须挪到**已经知道被打的是谁**
+     * 的那一句上去，不能在这里猜。这一格也是那条红线的落点：不许为了省事给目标挂"受伤倍率"。
      */
     public static int damageOf(BulletPool.Bullet b) {
-        return DamageRules.resolve(DamageRules.SRC_SHOT, DamageRules.ARMOR_NONE, b.damage);
+        return DamageRules.resolve(DamageRules.SRC_SHOT, DamageRules.ARMOR_REGULAR, b.damage);
     }
 }

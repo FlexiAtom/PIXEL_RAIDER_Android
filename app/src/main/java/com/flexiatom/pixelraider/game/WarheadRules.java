@@ -348,7 +348,7 @@ public final class WarheadRules {
             w.vx += m.vx * k;
             w.vy += m.vy * k;
         }
-        w.damage = DamageRules.resolve(DamageRules.SRC_ROD, DamageRules.ARMOR_NONE, m.damage);
+        w.damage = DamageRules.resolve(DamageRules.SRC_ROD, DamageRules.ARMOR_REGULAR, m.damage);
         w.size = m.size;
         w.color = m.color;
         w.crit = m.crit;
@@ -432,6 +432,6 @@ public final class WarheadRules {
      * <p>从杆的整数值派生、不是第三个伤害来源：这条结构约束是我的记账，他没有说过。
      */
     public static int shardDamage(int rodDamage) {
-        return DamageRules.resolve(DamageRules.SRC_SHARD, DamageRules.ARMOR_NONE, rodDamage / 4);
+        return DamageRules.resolve(DamageRules.SRC_SHARD, DamageRules.ARMOR_REGULAR, rodDamage / 4);
     }
 }

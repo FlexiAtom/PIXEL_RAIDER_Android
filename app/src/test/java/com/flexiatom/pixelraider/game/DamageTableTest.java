@@ -27,7 +27,7 @@ import org.junit.Test;
  * 「源 × 护甲」那张表本身（{@link DamageRules#resolve}）。
  *
  * <p>与 {@code DamageBaselineTest} 的分工：那一件钉的是**九条落点的输出**（重构前后同一批字面数），
- * 这一件钉的是**表的形状**——维度齐不齐、无护甲那一列是不是恒等、"百分之 0"会不会被下限吃掉。
+ * 这一件钉的是**表的形状**——维度齐不齐、普通护甲那一列是不是恒等、"百分之 0"会不会被下限吃掉。
  * 两边都在，才是"值没漂"＋"规则只有一份"两件事各自有证据。
  *
  * <p>表驱动而不是逐格一个 @Test：二十格写二十条用例，改一次数值就要改一片测试，那种测试留不住。
@@ -49,17 +49,17 @@ public class DamageTableTest {
     private static final int SOURCES = 10;
     private static final int ARMORS = 2;
 
-    /** 无护甲列 = 恒等（打折 1.0），所以下限之外不该有任何别的事发生。 */
+    /** 普通护甲列 = 恒等（他裁「所有种类的攻击对于普通护甲都是百分百」），所以下限之外不该有任何别的事发生。 */
     @Test
-    public void noArmorColumnIsTheIdentityAndKeepsEveryOldNumber() {
+    public void regularArmorColumnIsTheIdentityAndKeepsEveryOldNumber() {
         int cells = 0;
         for (int src = 0; src < DamageRules.SRC_COUNT; src++) {
             cells++;
-            int got = DamageRules.resolve(src, DamageRules.ARMOR_NONE, BASE);
+            int got = DamageRules.resolve(src, DamageRules.ARMOR_REGULAR, BASE);
             int floor = floorOf(src);
-            assertEquals("源 " + src + " 打无护甲目标不该被做任何事",
+            assertEquals("源 " + src + " 打普通护甲目标不该被做任何事",
                     Math.max(floor, Math.round(BASE)), got);
-            assertEquals("源 " + src + " 的无护甲倍率必须是 1", 1f, DamageRules.mulOf(src, DamageRules.ARMOR_NONE), 0f);
+            assertEquals("源 " + src + " 对普通护甲的倍率必须是 1", 1f, DamageRules.mulOf(src, DamageRules.ARMOR_REGULAR), 0f);
         }
         assertEquals("循环没跑 ⇒ 这条测试成了零断言假绿", SOURCES, cells);
     }
@@ -73,27 +73,36 @@ public class DamageTableTest {
     @Test
     public void floorsAreSplitBetweenPlayerSideAndAttackSide() {
         assertEquals(Balance.damage.contactFloor,
-                DamageRules.resolve(DamageRules.SRC_ENEMY_BULLET, DamageRules.ARMOR_NONE, 0f));
+                DamageRules.resolve(DamageRules.SRC_ENEMY_BULLET, DamageRules.ARMOR_REGULAR, 0f));
         assertEquals(Balance.damage.contactFloor,
-                DamageRules.resolve(DamageRules.SRC_CONTACT, DamageRules.ARMOR_NONE, 0f));
+                DamageRules.resolve(DamageRules.SRC_CONTACT, DamageRules.ARMOR_REGULAR, 0f));
         assertEquals(Balance.damage.contactFloor,
-                DamageRules.resolve(DamageRules.SRC_BOSS_CONTACT, DamageRules.ARMOR_NONE, 0f));
+                DamageRules.resolve(DamageRules.SRC_BOSS_CONTACT, DamageRules.ARMOR_REGULAR, 0f));
         for (int src = 0; src < DamageRules.SRC_COUNT; src++) {
             if (isPlayerFacing(src)) continue;
             assertEquals("攻击侧源 " + src + " 的下限恒为 1，不吃 contactFloor",
-                    1, DamageRules.resolve(src, DamageRules.ARMOR_NONE, 0f));
+                    1, DamageRules.resolve(src, DamageRules.ARMOR_REGULAR, 0f));
         }
     }
 
     /**
-     * 他那句逐字裁定的可执行形式：「目前仅格斗弹对子弹护甲的伤害是百分百」「其他武器…为百分之0」。
+     * 他那两句逐字裁定的可执行形式：「目前仅格斗弹对子弹护甲的伤害是百分百」「其他武器…为百分之0」，
+     * 加上 2026-10-04 那句「连续杆／碎片的 AoE 算"格斗弹的一部分"」⇒ 穿甲的是**格斗弹一族三档**，
+     * 不是孤零零一格。
+     *
+     * <p>这三档必须点名写死而不是"表里那几个 1"：这一条是他给的**玩法边界**（谁能清敌弹），
+     * 用循环反推等于让表自己解释自己——谁哪天顺手把 {@code SRC_OVERLOAD} 也填成 1f，
+     * 这条测试会跟着改期望而不是变红。
      */
     @Test
-    public void onlyTheDogfightBodyPiercesBulletArmor() {
+    public void onlyTheDogfightFamilyPiercesBulletArmor() {
         for (int src = 0; src < DamageRules.SRC_COUNT; src++) {
             int got = DamageRules.resolve(src, DamageRules.ARMOR_BULLET, 100f);
-            if (src == DamageRules.SRC_DOGFIGHT_BODY) {
-                assertEquals("格斗弹对子弹护甲必须是全额", 100, got);
+            boolean dogfightFamily = src == DamageRules.SRC_DOGFIGHT_BODY
+                    || src == DamageRules.SRC_ROD
+                    || src == DamageRules.SRC_SHARD;
+            if (dogfightFamily) {
+                assertEquals("格斗弹一族（弹体／杆／碎片）对子弹护甲必须是全额", 100, got);
             } else {
                 assertEquals("源 " + src + " 打子弹护甲必须是 0 点", 0, got);
             }
@@ -111,7 +120,9 @@ public class DamageTableTest {
     public void zeroPercentNeverCollectsTheMinimum() {
         assertEquals(0, DamageRules.resolve(DamageRules.SRC_SHOT, DamageRules.ARMOR_BULLET, 0.4f));
         assertEquals(0, DamageRules.resolve(DamageRules.SRC_SHOT, DamageRules.ARMOR_BULLET, 0f));
-        assertEquals(0, DamageRules.resolve(DamageRules.SRC_ROD, DamageRules.ARMOR_BULLET, 9999f));
+        // ⚠ 这里原来用 SRC_ROD——他 2026-10-04 裁「杆／碎片算格斗弹的一部分」之后杆是**穿得过**的，
+        // 同一条"再大的基准也抬不回 1 点"改用不穿的普通导弹弹体来测（换档不换命题）。
+        assertEquals(0, DamageRules.resolve(DamageRules.SRC_MISSILE_BODY, DamageRules.ARMOR_BULLET, 9999f));
         assertEquals(0, DamageRules.resolve(DamageRules.SRC_BOMB, DamageRules.ARMOR_BULLET, 1f));
         // 承受侧那三档也一样：0 就是 0，别让"至少掉一点"越过护甲
         assertEquals(0, DamageRules.resolve(DamageRules.SRC_ENEMY_BULLET, DamageRules.ARMOR_BULLET, 20f));
@@ -147,12 +158,53 @@ public class DamageTableTest {
     public void tableDimensionsAreTheDeclaredOnesAndEveryCellIsReachable() {
         assertEquals("伤害的源有 " + SOURCES + " 档（9 条路径，弹体按池分两档）",
                 SOURCES, DamageRules.SRC_COUNT);
-        assertEquals("今天只有两种护甲档位：没有护甲 ＋ 子弹护甲", ARMORS, DamageRules.ARMOR_COUNT);
+        assertEquals("今天只有两种护甲档位：普通护甲（除子弹外的一切）＋ 子弹护甲（敌弹）",
+                ARMORS, DamageRules.ARMOR_COUNT);
         for (int src = 0; src < DamageRules.SRC_COUNT; src++) {
             for (int armor = 0; armor < DamageRules.ARMOR_COUNT; armor++) {
                 DamageRules.mulOf(src, armor);
             }
         }
+    }
+
+    /**
+     * 「哪些比例其实是可选的」——他 2026-10-05 提醒的那件事的可执行形式。
+     *
+     * <p>倍率的分辨率是 {@code 1/base}：本仓量纲比红警2小一到两个数量级（RA2 单位几百血、武器几十伤；
+     * 我们单发 1～6 点、小怪 2～12 血），所以在低基准上**介于 0 与 1 之间的那一族数大多打不出来**。
+     * 下面这几档基准全是现读的真实值（激光 1、扳机 2、脉冲 3、弧形 4、回旋 5、导弹／弹体／杆 6、
+     * 碎片＝杆 6÷4 整除＝1、小怪弹 12、Boss 弹 20、超载 45）。
+     *
+     * <p>数的是"八个候选倍率能打出几个不同整数"：
+     * base 1 只打出 1 个（⇒ 那一档**只有 0 与 1 可选**）、base 6 打出 6 个、base ≥ 12 才 8 个全可区分。
+     * 这条不是"顺便测一下"，是给将来加第三型护甲的人划出**可填的格子**：往 base 1 的那几行填 0.64
+     * 会得到一句装饰，因为场上根本测不出它和 1.0 的区别。
+     */
+    @Test
+    public void ratioResolutionIsOneOverBaseSoOnlyBinaryStepsExistAtSmallBases() {
+        assertEquals("基准 1（激光单发／碎片）：任何正倍率都出 1 点 ⇒ 只有 0 与 1 两档真的可选",
+                1, distinctOutputsAtBase(1f));
+        assertEquals("基准 2（扳机）：要 r≥0.75 才看得见差别", 2, distinctOutputsAtBase(2f));
+        assertEquals("基准 3（脉冲）", 3, distinctOutputsAtBase(3f));
+        assertEquals("基准 6（导弹／弹体／杆）：约 17% 一档", 6, distinctOutputsAtBase(6f));
+        assertEquals("基准 12（小怪弹）：两位百分比才落得下去", 8, distinctOutputsAtBase(12f));
+        assertEquals("基准 45（超载／炸弹打 Boss）", 8, distinctOutputsAtBase(45f));
+
+        // 碎片那条最容易踩：它的基准是**整除后**的 1，所以它对任何护甲档位都只能出 1 点。
+        assertEquals(1, WarheadRules.shardDamage(6));
+        assertEquals("碎片打子弹护甲（他裁算格斗弹的一部分）＝ 1 点；而他裁敌弹 hp 取 1 占位 ⇒ 一片通一只",
+                1, DamageRules.resolve(DamageRules.SRC_SHARD, DamageRules.ARMOR_BULLET,
+                        WarheadRules.shardDamage(6)));
+    }
+
+    /** 八个候选倍率在给定基准下打出**几个不同**的整数（走生产的 resolve，不另抄取整）。 */
+    private static int distinctOutputsAtBase(float base) {
+        java.util.Set<Integer> seen = new java.util.TreeSet<>();
+        float[] ratios = {0.15f, 0.25f, 0.35f, 0.5f, 0.64f, 0.75f, 0.85f, 1.0f};
+        for (float r : ratios) {
+            seen.add(DamageRules.resolve(DamageRules.SRC_OVERLOAD, DamageRules.ARMOR_REGULAR, base * r));
+        }
+        return seen.size();
     }
 
     /** 与 {@code DamageRules.floorFor} 同一句话的两个副本——**测试端的副本是有意的**：

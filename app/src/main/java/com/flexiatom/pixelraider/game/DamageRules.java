@@ -30,9 +30,13 @@ package com.flexiatom.pixelraider.game;
  * {@code max(contactFloor, round(乘状态层))}）收进 {@link #resolve} 一个出口，
  * 于是"这一击打几折、怎么变成整数"再也没有第二个地方可以改。
  *
- * <p>{@link #MUL} 是**源 × 护甲**表，纵向是打出这一击的东西、横向是被打的东西带哪种护甲。
- * 分成两个维度是必须的：同一种护甲对机炮是铁板、对格斗弹是纸，而同一把格斗弹打无护甲目标
+ * <p>{@link #MUL} 是**源 × 护甲**表（模型抄红警2，他 2026-10-04 逐字「护甲和修正比都是敌人的属性，
+ * …"木甲"是一种属性，所以本身没有属性」）：纵向是打出这一击的东西、横向是被打的东西带哪种护甲。
+ * 分成两个维度是必须的：同一种护甲对机炮是铁板、对格斗弹是纸，而同一把格斗弹打普通护甲目标
  * 又该照原样出血——"谁打的"和"打在什么上面"是两句话，揉进一个 if 就再也问不出来了。
+ *
+ * <p>⚠ 红线（他同句给的：「以后要是某个东西要换修正比换护甲即可」）：**任何实体都不许挂
+ * "受伤倍率"字段**。要改某个东西挨打的方式，唯一动作是改它声明的护甲类型。
  */
 public final class DamageRules {
 
@@ -53,16 +57,17 @@ public final class DamageRules {
     public static final int SRC_MISSILE_BODY = 1;
     /**
      * 格斗弹的弹体撞击档。它必须与 {@link #SRC_MISSILE_BODY} **分档而不是合并**：
-     * 他 2026-10-03 的逐字是「目前仅格斗弹对子弹护甲的伤害是百分百」「其他武器（目前是除了
-     * 格斗弹以外的所有）…为百分之0」——这一格 100% 是整张表里唯一的非零，两流合并就写不出这句话。
+     * 他 2026-10-04 的逐字是「目前仅格斗弹对子弹护甲的伤害是百分百」「其他武器（目前是除了
+     * 格斗弹以外的所有）…为百分之0」——「弹体撞击」这一条代码路径上只有格斗流那一支穿得过甲，
+     * 两流合并就写不出这句话。
      *
      * <p>两流的身份在**池**上（{@link MissileBehavior#STREAM_DOGFIGHT}，理由见那里的注释），
      * 弹身上没有布尔；所以本档由 {@code Game.stepPool} 按"这枚弹在哪个池里"传给结算点。
      */
     public static final int SRC_DOGFIGHT_BODY = 2;
-    /** 连续杆亮线（每次 tick 的完整伤害）。 */
+    /** 连续杆亮线（每次 tick 的完整伤害）。他裁「杆／碎片算格斗弹的一部分」，见 {@link #MUL}。 */
     public static final int SRC_ROD = 3;
-    /** 亮线破碎后的碎片（杆值的四分之一）。 */
+    /** 亮线破碎后的碎片（杆值的四分之一）。与杆同档。 */
     public static final int SRC_SHARD = 4;
     /** 超载扫描。 */
     public static final int SRC_OVERLOAD = 5;
@@ -76,38 +81,64 @@ public final class DamageRules {
     public static final int SRC_BOSS_CONTACT = 9;
 
     // ---- 护甲的种类 ------------------------------------------------------------------------
+    //
+    // **模型（他 2026-10-04 逐字，并举红警2说明：「我们这里的护甲设计就是抄的红警2……
+    // 护甲和修正比都是敌人的属性，这里假设一个叫木甲的甲，"木甲"是一种属性，所以本身没有属性」）**：
+    // 护甲是**目标身上的类型标签，本身不带任何数值**；折数长在**攻击方**身上。
+    // 所以「子弹护甲打几折」这句问法本身是错的——该问「这一发对某一型甲是多少」，
+    // 而那个「多少」就是下面的 {@link #MUL}（对应 RA2 武器上的 Verses 表）。
+    //
+    // ⚠ 由这条模型得一条红线（他同一句里给的：「以后要是某个东西要换修正比换护甲即可」）：
+    // **任何实体都不许挂"受伤倍率"字段**。想改某个东西挨打的方式，唯一动作是改它声明的护甲类型。
+    // 一旦允许逐实体倍率，这张表立刻退化成第二个真源，"这一发打在什么上面"就再也问不出来了。
 
-    /** 没有护甲：今天的场上人人都是这一档，MUL 的这张列就是重构前的行为本身。 */
-    public static final int ARMOR_NONE = 0;
     /**
-     * 子弹护甲（用户 2026-10-03 命名的两种护甲之一）：只穿在**敌弹**上，等 #67「对弹机制」把
-     * 敌弹升格成有血量的实体时才有持有者。今天没有任何东西带它，所以这一列还不参与任何结算——
-     * 但它现在就该写成他的原话，否则将来加持有者时会照着一张没表意的表做决定。
+     * 普通护甲。他裁的原话是「普通护甲目前是除子弹外的所有」「所有种类的攻击对于普通护甲都是百分百」
+     * ⇒ 场上除敌弹外的一切都穿这一型，**玩家也算**（撞机与敌弹打的都是它）。
      *
-     * <p>⚠ 他说的第二种「普通护甲」**故意不进表**：数值与载体他还没给（见
-     * {@code ~/.Athena/…/pool/armor-two-kinds.md} 的三个待问项）。加一列全 1.0 是**假表**——
-     * 那会被读成"他裁了百分之百"。等数到手再加，一行数组的事。
+     * <p>这一列全 1f，输出与档二重构前那句"无护甲"逐字相同：改名是把他的裁定写成**表上的事实**，
+     * 不是新引入一种数。原来那一档叫 {@code NONE} 已经不成立——按"除子弹外的所有"，
+     * 场上没有"无甲"的东西，留一列没人穿的甲是另一张假表。
+     */
+    public static final int ARMOR_REGULAR = 0;
+    /**
+     * 子弹护甲：只穿在**敌弹**上（{@code #67} 把敌弹升格成有血量实体那天才有持有者；
+     * 他已裁血量「取 1 占位」）。今天没有任何东西带它，所以这一列还不参与任何结算——
+     * 但它现在就写成他的原话，否则将来加持有者时会照着一张没表意的表做决定。
      */
     public static final int ARMOR_BULLET = 1;
 
     /**
-     * 源 × 护甲的倍率表。逐行对照 {@link #SRC_SHOT}…{@link #SRC_BOSS_CONTACT} 的顺序。
+     * 源 × 护甲的倍率表。列序是 {@code {ARMOR_REGULAR, ARMOR_BULLET}}，
+     * 行序逐字对照 {@link #SRC_SHOT}…{@link #SRC_BOSS_CONTACT}。
      *
-     * <p>{@code BULLET} 列的读法：他裁的是「仅格斗弹百分百、其他武器百分之**0 并且忽略**」。
-     * "0"与"忽略"在这里是同一个数——{@link #resolve} 见 0 直接还 0、**不吃下限**，
-     * 于是"打到了没伤害"与"根本没打到"在数值上合一；将来 #67 决定要不要建那条命中判据时，
-     * 读的也是这一格（{@code mulOf(src, ARMOR_BULLET) > 0} 就是"该不该检测"），不必再抄一份规则。
+     * <p>{@code REGULAR} 列 = 恒等，那是他那句「所有种类的攻击对于普通护甲都是百分百」的形状；
+     * 今天所有结算都走这一列。
      *
-     * <p>⚠ {@code SRC_ROD} / {@code SRC_SHARD} 两行的 0 是**待裁**而不是已定：杆与碎片是
-     * 战斗部，出自哪一流在它生出来之后就问不出来了（它们住在共用池里），所以"格斗弹的 AoE
-     * 算不算格斗弹"这一格我按"其他武器"的字面填 0，等他改。
+     * <p>{@code BULLET} 列的读法：「仅格斗弹百分百、其他武器百分之**0 并且忽略**」，
+     * 而他 2026-10-04 又裁「连续杆／碎片的 AoE 算"格斗弹的一部分"」⇒ 穿甲的是**格斗弹一族三档**
+     * （弹体 {@link #SRC_DOGFIGHT_BODY}、亮线 {@link #SRC_ROD}、碎片 {@link #SRC_SHARD}），
+     * 不是孤零零一格。"0"与"忽略"在这里仍是同一个数——{@link #resolve} 见 0 直接还 0、**不吃下限**，
+     * 于是"打到了没伤害"与"根本没打到"在数值上合一；#67 决定要不要建那条命中判据时读的也是这一格
+     * （{@code mulOf(src, ARMOR_BULLET) > 0} 就是"该不该检测"），不必再抄一份规则。
+     *
+     * <p>⚠ **想往这张表里填 0 与 1 之间那一族数（RA2 的 25%／64%／85%）之前，先看基准**：
+     * 倍率的分辨率是 {@code 1/base}，而本仓的量纲比 RA2 小一到两个数量级（RA2 单位几百血、
+     * 武器几十伤害；我们单发 1～6 点、小怪 2～12 血）。拿生产的取整实测（量具归档在
+     * {@code ~/.Athena/projects/PIXEL_RAIDER_Android/reference/比例分辨率量具.java}）：
+     * 基准 1（激光单发、碎片＝杆 6÷4）只有 0 与 1 两档打得出来，任何正倍率都出 1 点；
+     * 基准 2 要 r≥0.75 才看得见差别；基准 6（导弹／弹体／杆）约 17% 一档；
+     * 基准 12 以上（敌弹 12／20、超载 45、炸弹打 Boss）才够摆两位百分比。
+     * ⇒ 今天这张表**只有二元档位是"可选的"**。这不是缺陷，是量纲的后果；真要上"几折"那一族，
+     * 该动的是基准（武器伤害或血量整体抬一档），不是动这张表——在这里填 0.64 只会得到一句
+     * 打在 1 点基准上安静地等于 1.0 的假档。
      */
     private static final float[][] MUL = {
             { 1f, 0f },   // SRC_SHOT
             { 1f, 0f },   // SRC_MISSILE_BODY
             { 1f, 1f },   // SRC_DOGFIGHT_BODY   ← 他逐字的那一格
-            { 1f, 0f },   // SRC_ROD             （待裁）
-            { 1f, 0f },   // SRC_SHARD           （待裁）
+            { 1f, 1f },   // SRC_ROD             （他裁：算格斗弹的一部分）
+            { 1f, 1f },   // SRC_SHARD           （同上）
             { 1f, 0f },   // SRC_OVERLOAD
             { 1f, 0f },   // SRC_BOMB
             { 1f, 0f },   // SRC_ENEMY_BULLET
@@ -201,7 +232,7 @@ public final class DamageRules {
 
     /** 撞机伤害：按最大生命比例，含该种怪的 contactBonus 修正。 */
     public static int contactDamage(Balance.Enemy e, int maxHp) {
-        return resolve(SRC_CONTACT, ARMOR_NONE, maxHp * ratioFor(e));
+        return resolve(SRC_CONTACT, ARMOR_REGULAR, maxHp * ratioFor(e));
     }
 
     /** 自爆怪只有在**贴脸**时才吃 60%，非贴脸的擦碰按普通撞机。 */
@@ -209,7 +240,7 @@ public final class DamageRules {
         float ratio = e.id == Balance.Enemy.BURSTER && pointBlank
                 ? Balance.damage.bursterHitRatio
                 : ratioFor(e);
-        return resolve(SRC_CONTACT, ARMOR_NONE, maxHp * ratio);
+        return resolve(SRC_CONTACT, ARMOR_REGULAR, maxHp * ratio);
     }
 
     private static float ratioFor(Balance.Enemy e) {
@@ -217,7 +248,7 @@ public final class DamageRules {
     }
 
     public static int bossContactDamage(int maxHp) {
-        return resolve(SRC_BOSS_CONTACT, ARMOR_NONE, maxHp * Balance.damage.bossHitRatio);
+        return resolve(SRC_BOSS_CONTACT, ARMOR_REGULAR, maxHp * Balance.damage.bossHitRatio);
     }
 
     /** 子弹类固定点数：Boss 弹 20、小怪弹 12。**这是基准值，不是结算值**——出膛时写进弹身，
@@ -228,7 +259,7 @@ public final class DamageRules {
 
     /** 超载扫描：固定大伤害，随状态层不缩放（它是玩家主动释放，不是承受）。 */
     public static int overloadDamage() {
-        return resolve(SRC_OVERLOAD, ARMOR_NONE, Balance.damage.sweepDamage);
+        return resolve(SRC_OVERLOAD, ARMOR_REGULAR, Balance.damage.sweepDamage);
     }
 
     /**
@@ -239,7 +270,7 @@ public final class DamageRules {
      * 是护甲表要能表达的第三种读法，所以它得住在表这边而不是散在调用点。
      */
     public static int bombDamage(int targetMaxHp) {
-        return resolve(SRC_BOMB, ARMOR_NONE, targetMaxHp * Balance.damage.bombHpRatio);
+        return resolve(SRC_BOMB, ARMOR_REGULAR, targetMaxHp * Balance.damage.bombHpRatio);
     }
 
     /**

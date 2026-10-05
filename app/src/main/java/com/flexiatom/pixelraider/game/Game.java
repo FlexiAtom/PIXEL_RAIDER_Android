@@ -1670,7 +1670,7 @@ public final class Game implements GameThread.Host {
     private void settleImpact(Missiles.Missile m, int slot, int bodySource) {
         Enemies.Enemy e = enemies.objAt(slot);
         if (e == null || e.hp <= 0) return;
-        e.hp -= DamageRules.resolve(bodySource, DamageRules.ARMOR_NONE, m.damage);
+        e.hp -= DamageRules.resolve(bodySource, DamageRules.ARMOR_REGULAR, m.damage);
         e.hitFlash = 0.09f;
         if (e.hp <= 0) killEnemy(e, m.crit);
     }
@@ -1808,7 +1808,7 @@ public final class Game implements GameThread.Host {
             // 基准点数是出膛时写死的整数（12/20），过这一档结算今天等于原样，但"打折"这一层
             // 从此只有 resolve 一个出口——将来玩家侧若挂上护甲，也在这同一格里读。
             hurtPlayer(DamageRules.resolve(DamageRules.SRC_ENEMY_BULLET,
-                    DamageRules.ARMOR_NONE, b.damage), false);
+                    DamageRules.ARMOR_REGULAR, b.damage), false);
             if (!player.alive || player.invulnerable()) return;   // 一次受伤只算一发：无敌帧生效了
         }
     }

@@ -45,21 +45,21 @@ public class DamageBaselineTest {
 
     private final int[] out = new int[3];
 
-    /** 打**无护甲**目标——今天场上人人如此，所以九条落点全都走这一格。 */
-    private static int againstNothing(int source, float base) {
-        return DamageRules.resolve(source, DamageRules.ARMOR_NONE, base);
+    /** 打**普通护甲**目标——他裁「普通护甲目前是除子弹外的所有」，所以九条落点今天全走这一格。 */
+    private static int againstRegularArmor(int source, float base) {
+        return DamageRules.resolve(source, DamageRules.ARMOR_REGULAR, base);
     }
 
     /** 落点①玩家弹 → 敌（{@code Game.playerShotsAgainstEnemies}）：round 之后兜到至少 1。 */
     @Test
     public void shotDamageRoundsThenFloorsToOne() {
-        assertEquals(1, againstNothing(DamageRules.SRC_SHOT, 0.4f));   // round=0 ⇒ 下限把它抬回 1
-        assertEquals(1, againstNothing(DamageRules.SRC_SHOT, 1.2f));
-        assertEquals(2, againstNothing(DamageRules.SRC_SHOT, 1.5f));   // Math.round 是"四舍六入五取偶上位"
-        assertEquals(3, againstNothing(DamageRules.SRC_SHOT, 2.6f));
-        assertEquals(7, againstNothing(DamageRules.SRC_SHOT, 7.2f));
-        assertEquals(1, againstNothing(DamageRules.SRC_SHOT, 0f));     // ⚠ 0 点也掉 1：今天就是这条行为
-        assertEquals(1, againstNothing(DamageRules.SRC_SHOT, -5f));    // 负数不会加血
+        assertEquals(1, againstRegularArmor(DamageRules.SRC_SHOT, 0.4f));   // round=0 ⇒ 下限把它抬回 1
+        assertEquals(1, againstRegularArmor(DamageRules.SRC_SHOT, 1.2f));
+        assertEquals(2, againstRegularArmor(DamageRules.SRC_SHOT, 1.5f));   // Math.round 是"四舍六入五取偶上位"
+        assertEquals(3, againstRegularArmor(DamageRules.SRC_SHOT, 2.6f));
+        assertEquals(7, againstRegularArmor(DamageRules.SRC_SHOT, 7.2f));
+        assertEquals(1, againstRegularArmor(DamageRules.SRC_SHOT, 0f));     // ⚠ 0 点也掉 1：今天就是这条行为
+        assertEquals(1, againstRegularArmor(DamageRules.SRC_SHOT, -5f));    // 负数不会加血
         // 弹身那一侧的糖只是把同一档接上 b.damage，不另做决定
         BulletPool.Bullet b = new BulletPool(1).spawn();
         b.damage = 7.2f;
@@ -75,9 +75,9 @@ public class DamageBaselineTest {
      */
     @Test
     public void missileBodyDamageSharesTheRoundingRuleButNotTheSource() {
-        assertEquals(againstNothing(DamageRules.SRC_SHOT, 7.2f),
-                againstNothing(DamageRules.SRC_MISSILE_BODY, 7.2f));
-        assertEquals(7, againstNothing(DamageRules.SRC_MISSILE_BODY, 7.2f));
+        assertEquals(againstRegularArmor(DamageRules.SRC_SHOT, 7.2f),
+                againstRegularArmor(DamageRules.SRC_MISSILE_BODY, 7.2f));
+        assertEquals(7, againstRegularArmor(DamageRules.SRC_MISSILE_BODY, 7.2f));
         assertTrue("普通导弹与格斗弹必须分档，否则他那句「仅格斗弹百分百」无处可写",
                 DamageRules.SRC_MISSILE_BODY != DamageRules.SRC_DOGFIGHT_BODY);
     }
@@ -85,8 +85,8 @@ public class DamageBaselineTest {
     /** 落点③连续杆 → 敌（{@code WarheadRules.spawnRod}）：伤害在生出那一刻已经取整过。 */
     @Test
     public void rodDamageIsRoundedAtSpawnTime() {
-        assertEquals(7, againstNothing(DamageRules.SRC_ROD, 6.9f));    // 与 WarheadRulesTest 那个 6.9f 同值
-        assertEquals(1, againstNothing(DamageRules.SRC_ROD, 0.2f));
+        assertEquals(7, againstRegularArmor(DamageRules.SRC_ROD, 6.9f));    // 与 WarheadRulesTest 那个 6.9f 同值
+        assertEquals(1, againstRegularArmor(DamageRules.SRC_ROD, 0.2f));
     }
 
     /** 落点③′碎片 → 敌（{@code WarheadRules.shardDamage}）：整除四分之一、最小 1（他逐字的数）。 */
@@ -127,8 +127,8 @@ public class DamageBaselineTest {
         assertEquals(12, DamageRules.bulletDamage(false));
         assertEquals(20, DamageRules.bulletDamage(true));
         // 出膛写的是基准，打到人那一刻过 SRC_ENEMY_BULLET：整数过一遍 round + 下限，当然还是它自己
-        assertEquals(12, againstNothing(DamageRules.SRC_ENEMY_BULLET, DamageRules.bulletDamage(false)));
-        assertEquals(20, againstNothing(DamageRules.SRC_ENEMY_BULLET, DamageRules.bulletDamage(true)));
+        assertEquals(12, againstRegularArmor(DamageRules.SRC_ENEMY_BULLET, DamageRules.bulletDamage(false)));
+        assertEquals(20, againstRegularArmor(DamageRules.SRC_ENEMY_BULLET, DamageRules.bulletDamage(true)));
     }
 
     /** 落点⑥′敌弹打到玩家身上：盾先吸收，盾不够才掉血。 */
