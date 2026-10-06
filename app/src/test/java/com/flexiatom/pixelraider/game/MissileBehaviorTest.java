@@ -1243,36 +1243,87 @@ public final class MissileBehaviorTest {
     }
 
     /**
-     * 二档跳的是**发射扇形的夹角**，不跳半径。口径出处是他 2026-10-06 的逐字（本地时间）：
-     * 「我的建议是加个二级卡，加大发射扇形<b>总夹角到100°</b>并给转弯率翻倍」——夹角 100° 是他的数，
-     * <b>"总夹角 ⇒ 半角 50°"这个折半、以及"半径不跟着涨"这两条是我的</b>（他那句给的是夹角，
-     * 而半径 50 那格他另有 L36897 一句"若机头前半径50、圆心角60度的扇形内…"钉着）。
+     * 二档跳的是**整条发射扇形**：夹角与半径两条边一起跳，但各自跳到他的数上。口径出处是他
+     * 2026-10-06 的两轮逐字（本地时间）：
+     * <ul>
+     *   <li>第一轮「我的建议是加个二级卡，加大发射扇形<b>总夹角到100°</b>并给转弯率翻倍」；</li>
+     *   <li>第二轮（看完落码读数之后改口，<b>作废了 100° 与"半径不动"两格</b>）
+     *       「100度还是感觉低了，<b>拉到125度</b>吧，二级的<b>50锁定距离拉到70</b>，不建议再高，
+     *       否则会抢普通弹的活，能对弹（打敌方子弹）才是真正的差异化」。</li>
+     * </ul>
+     * 所以 <b>125°、70、以及"70 就是上界"这三条是他的</b>；<b>"总夹角 ⇒ 半角 62.5°"这个折半是我的</b>
+     * （与机动过载那张同一条读法口径）。半径从"不动"改成"动到 70"这件事本身，是他第二轮亲口推翻我
+     * 第一轮的那半条实现选择 ⇒ 这条用例换掉的就是上一版里那句"二档不得扩半径"的断言。
      *
-     * <p>三只各挡一种错法：45° 那只一级够不着、二档够得着＝放宽真的接进了发射判据（写死在
-     * {@code beginFrame} 的 {@code launchCos2} 上，而不是只写进 {@link Balance.Missile#dogfightHalfDegTier2}
-     * 那个字段——后者没有这条断言的话，改了也没人响）；半径外那只到二档仍然够不着＝夹角与半径是
-     * 两条独立判据，别把"放宽"实现成"整个圈放大"；而挑中的必须是 45° 那只＝放宽扇形没顺手把
-     * "取最近"改成"取视角更正的那只"。
+     * <p>六步各挡一种错法，且<b>每步只留一只活目标</b>（{@link #bearingUp} 摆的位一旦两只同时活着，
+     * "取最近"会让远处那只永远测不到）：45° 一级不出／二级出＝夹角真的接进了 {@code launchCos2}；
+     * 轴上 60px 一级不出／二级出＝半径真的接进了 {@code launchRange}（只写进 {@code Balance} 字段的话
+     * 没人会响）；二档在 70 之外不出＝放宽没把扇形写成全向；偏轴 75° 不出＝125° 没被读成 180°。
      */
     @Test
-    public void theSecondTierWidensTheLaunchAngleWithoutGrowingTheRange() {
+    public void theSecondTierWidensTheLaunchSectorAndPushesItsRimOut() {
         assertTrue("45° 不落在两档半角之间 ⇒ 这条用例摆错了位，两头都在同一个锥里它只会空转",
                 spec.dogfightHalfDeg < 45f && 45f < spec.dogfightHalfDegTier2);
+        assertTrue("60px 不落在两档半径之间 ⇒ 同上（半径那一半会测不出差别）",
+                spec.dogfightRange < 60f && 60f < spec.dogfightRangeTier2);
+        assertTrue("半角已到 75° 以上 ⇒ 125° 那句已经被读成全向，下面那条边界断言无意义",
+                spec.dogfightHalfDegTier2 < 75f);
         Enemies.Enemy wide = bearingUp(START_X, START_Y, 45f, 20f);
-        bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);      // 正对机头，但在半径外
+        Enemies.Enemy far = bearingUp(START_X, START_Y, 0f, 60f);
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
-        assertEquals("一级的锥里没人 ⇒ 该一枚不出（45° 在 30° 半角之外）",
+        far.hp = 0;
+        assertEquals("一级的锥是 30° 半角 ⇒ 45° 那只该不出",
+                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        wide.hp = 0;
+        far.hp = 20;
+        assertEquals("一级停在 50 ⇒ 轴上 60px 那只该不出",
                 -1, dog.tryLaunch(START_X, START_Y, foes, spec));
         assertTrue(run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
         assertTrue("第二档被拒 ⇒ 下面断的是个买不到的形状",
                 run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
+        far.hp = 0;
+        wide.hp = 20;
         assertEquals("放宽没接到发射判据上 ⇒ 45° 那只到二档还是够不着",
                 slotOf(wide), dog.tryLaunch(START_X, START_Y, foes, spec));
-        wide.hp = 0;                                        // 只剩半径外那一只活着
+        wide.hp = 0;
+        far.hp = 20;
+        assertEquals("半径没接到发射判据上 ⇒ 二档那 70px 只活在 Balance 的字段里",
+                slotOf(far), dog.tryLaunch(START_X, START_Y, foes, spec));
+        far.hp = 0;
+        Enemies.Enemy out = bearingUp(START_X, START_Y, 0f, spec.dogfightRangeTier2 + 5f);
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
-        assertEquals("二档把半径也一起放大了 ⇒ 「加大发射扇形」那句里没有一个字是距离",
+        assertEquals("半径涨到 70 却把边丢了 ⇒ 出弹判据退化成「偏角对得上就发」",
                 -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        out.hp = 0;
+        bearingUp(START_X, START_Y, 75f, 20f);
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
+        assertEquals("总夹角 125° 被读成全向 ⇒ 正侧方也发弹，那是把近战补位做成第二把主炮",
+                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+    }
+
+    /**
+     * 二级半径的**上界**——他 2026-10-06 那句里唯一一句"为什么停在这儿"：
+     * 「二级的50锁定距离拉到70，<b>不建议再高，否则会抢普通弹的活</b>，能对弹（打敌方子弹）才是真正的差异化」。
+     *
+     * <p>这句话落不成一个数（70 是他直接给的），但落得成一个**式子**：格斗弹的出弹圈不许追平
+     * 普通弹涨满后的导引半径。今天读出来是 {@code 70 < 50 + 75 = 125}，差 55px——那就是他要留的缝。
+     * 式子右边不写死 125：它跟着「二次点火」那张卡的级数走，将来那张卡加级，这条缝自动重算，
+     * 而"抢活"这条裁定不会因为一份过期的常数被误读成"已经允许了"。
+     *
+     * <p>后半那句（对弹才是差异化）本件**不实现**，它登记在 {@code bullet-hp-vs-bullet} 池件与
+     * 任务 #67 上；这里只留它作为**上界凭据**的读数。
+     */
+    @Test
+    public void itsSecondTierRimStaysShorterThanTheStandardSeekers() {
+        ShopRun maxed = new ShopRun();
+        while (maxed.buyUpgrade(Balance.ShopCard.IGNITION)) {
+            // 涨到那张卡自己到顶为止；闸门在 ShopRules 里，不在这儿复制
+        }
+        assertTrue("普通弹涨满的导引半径没超过出厂档 ⇒ 下面那条比较失去意义（表改了，这条口径要重看）",
+                maxed.seekerRangeBonus() > 0f);
+        assertTrue("格斗二档的出弹圈追平普通弹的导引半径 ⇒ 他那句「不建议再高，否则会抢普通弹的活」被推翻",
+                spec.dogfightRangeTier2 < spec.seekerRange + maxed.seekerRangeBonus());
     }
 
     /**
@@ -1485,7 +1536,7 @@ public final class MissileBehaviorTest {
      * {@code 1040×2 + 370×N}，不是 {@code (1040 + 370×N)×2}。两种写法在过载卡满级时差
      * 1480 px/s²（3560 对 5040 ⇒ 首步 15.45°/步 对 21.88°/步，画面上是两种弹道），
      * 所以这一格必须有个读数钉着，不能靠"反正差不多"。判据出处同
-     * {@link #theSecondTierWidensTheLaunchAngleWithoutGrowingTheRange}：他那句「给转弯率<b>翻倍</b>」
+     * {@link #theSecondTierWidensTheLaunchSectorAndPushesItsRimOut}：他那句「给转弯率<b>翻倍</b>」
      * 里被翻倍的主语是**这条流自带的转弯率**，而卡那份增量是另一张卡卖的（L36568 起两个版本都写着
      * 「并且能叠加最大过载卡」——叠在谁身上由这句决定，不由实现顺手决定）。
      *

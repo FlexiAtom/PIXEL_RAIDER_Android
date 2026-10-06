@@ -374,7 +374,7 @@ public class ShopRulesTest {
 
         // 格斗弹是这一族里唯一**不**在一级下架的那张：它卖两档，一级给机制、二级给量。
         s.level[Balance.ShopCard.DOGFIGHT] = 1;
-        assertTrue("买了二级的那一格被自己摘掉了 ⇒ 这局再也买不到 100°/翻倍",
+        assertTrue("买了二级的那一格被自己摘掉了 ⇒ 这局再也买不到那 125°／70px／翻倍",
                 has(shelf(s), Balance.ShopCard.DOGFIGHT));
         assertEquals("它在架时那十张没别的变化", 10, shelf(s).length);
         s.level[Balance.ShopCard.DOGFIGHT] = 2;

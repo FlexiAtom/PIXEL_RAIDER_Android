@@ -146,11 +146,20 @@ public final class MissileBehavior {
      * 的值。他的字是「机头前半径50、圆心角60度的扇形」——**一条**扇形，发射与发射后的导引共用它，
      * 所以这里只换算一次，两处的值结构性相同。
      *
-     * <p>2026-10-06 起它是**按档解析**的：一级 60°、二级 100°（{@code ShopRun.dogfightTier2()}），
+     * <p>2026-10-06 起它是**按档解析**的：一级 60°、二级 125°（{@code ShopRun.dogfightTier2()}），
      * 但"一条扇形两处共用"这条没变——跳档时发射判据与飞行段导引头一起跳，不会出现"出得了弹却追不上"
      * 那种两半错开的档。
      */
     private float launchCos2 = -1f;
+    /**
+     * 本帧的**有效**发射扇形半径（逻辑像素）：一级 {@link Balance.Missile#dogfightRange}、
+     * 二级 {@link Balance.Missile#dogfightRangeTier2}，与 {@link #launchCos2} 同一格解析
+     * （同一条"全帧同一份、下一帧改了立刻生效"的理由，也同一条"局内成长不烙进 {@code Balance}"的理由）。
+     *
+     * <p>它是 {@link #tryLaunch} 的判据，也是格斗流 {@link #seekerRangeEff} 的值——与那条半角一样，
+     * **一条扇形两处共用**，跳档时一起跳，不出现"出得了弹却追不上"那种两半错开的档。
+     */
+    private float launchRange = -1f;
     private float balanceSpeed = -1f;
     /**
      * 本帧的**有效**导引头半径／最大过载／导航常数／动力段／两个开关：出厂值 ＋ 簇 II 各卡的增量，
@@ -249,7 +258,11 @@ public final class MissileBehavior {
         // 「机动过载」「二次点火」那两条加成仍然够不着这里——那是导引头的名词，与发射判据是两个字段
         // （见 {@link Balance.Missile#dogfightHalfDeg} 与 {@link Balance.Missile#seekerHalfDeg} 那条口径）。
         // 换句话说"能不能自动出弹"今天确实是成长量了，但**只有这张卡自己能把它抬**，一条流一个商品位。
+        // 半径与夹角**同档一起跳**（他 2026-10-06 第二轮补的就是半径：「二级的50锁定距离拉到70」），
+        // 但两条的**上界各有各的凭据**：夹角他给了逐字数、半径那一格他连"不建议再高"的理由一起给了
+        // （见 Balance.Missile.dogfightRangeTier2），所以别把这两个数当同一个旋钮的两种写法。
         launchCos2 = cos2(run.dogfightTier2() ? spec.dogfightHalfDegTier2 : spec.dogfightHalfDeg);
+        launchRange = run.dogfightTier2() ? spec.dogfightRangeTier2 : spec.dogfightRange;
         balanceSpeed = spec.thrust / spec.dragK;
         if (stream == STREAM_DOGFIGHT) {
             // 它吃到的卡有两条腿：**最大过载**那条（他的字「自带高过载…并且能叠加最大过载卡」）与
@@ -258,7 +271,7 @@ public final class MissileBehavior {
             // {@link #tryLaunch} 那条扇形就是它的视野），而机动过载卖的是**导引头**的夹角与
             // **导引头**的半径——那是普通弹"开眼之后"的那条扇形，与格斗弹发射判据这条是两个名词、两个字段。
             seekerCos2 = launchCos2;
-            seekerRangeEff = spec.dogfightRange;      // 半径不跳档：他那句给的是夹角，不是半径
+            seekerRangeEff = launchRange;
             // 翻倍只乘自带那一段，不乘过载卡的加成（理由见 Balance.Missile.dogfightLatAccelTier2Mul）。
             float own = run.dogfightTier2() ? spec.dogfightLatAccel * spec.dogfightLatAccelTier2Mul
                     : spec.dogfightLatAccel;
@@ -286,14 +299,17 @@ public final class MissileBehavior {
     }
 
     /**
-     * 格斗弹的**发射判据**（只有 {@link #STREAM_DOGFIGHT} 的实例有意义）：机头前那条
-     * 「半径 50、圆心角 60 度的扇形」（他的逐字口径，见 {@link Balance.Missile#dogfightRange}）里
+     * 格斗弹的**发射判据**（只有 {@link #STREAM_DOGFIGHT} 的实例有意义）：机头前那条扇形里
      * 有没有**还没被本流锁走**的目标；有则给出其中最近那一只的敌人 obj 槽号。
+     *
+     * <p>扇形的形状**按档解析**（{@link #launchCos2}、{@link #launchRange}，都在 {@link #beginFrame}
+     * 里定），一级是他 L36897 那句逐字的「半径50、圆心角60度的扇形」，二级是他 2026-10-06 的
+     * 「总夹角 125°」＋「50锁定距离拉到70」⇒ 本方法的判据里**没有** {@code spec.dogfightXxx} 的直接读取，
+     * 只有那一份解析结果：往 {@code spec} 上再加一个数就会造出"出得了弹但追不上"的第二条真相。
      *
      * <p>三条判据各自挡住一种失效：
      * <ul>
-     *   <li><b>扇形</b>（轴 = 常量屏幕正上方、半角 {@link Balance.Missile#dogfightHalfDeg}、
-     *       半径 {@link Balance.Missile#dogfightRange}）＝"打得着才发射"。没有这条，买了卡的玩家
+     *   <li><b>扇形</b>（轴 = 常量屏幕正上方、半角与半径见上条）＝"打得着才发射"。没有这条，买了卡的玩家
      *       会朝着一整屏的敌人每帧出弹，那把"近战补位"变成了第二把主炮。</li>
      *   <li><b>跳过被本流占用的槽</b>＝一敌一锁。这条是**整个发射端没有节拍字段**的全部理由：
      *       同一只敌机在被打掉那份锁之前不会再吃一枚，所以场上格斗弹的数量自限在
@@ -306,7 +322,8 @@ public final class MissileBehavior {
      * <p>取**最近**那只（不是"扇形里第一个遇到的"）：格斗弹卖的是近身补位，跨过眼前这只去打后面那只
      * 是反着读需求。这条排序是我的实现，他只说了"最近的目标"那一半（L14750 说的是锁定端）。
      *
-     * <p>⚠ 必须排在 {@link #beginFrame} 之后调用（读的是本帧的占用戳与 {@link #launchCos2}），
+     * <p>⚠ 必须排在 {@link #beginFrame} 之后调用（读的是本帧的占用戳与 {@link #launchCos2}／
+     * {@link #launchRange} 这一对解析值；哨兵只查前者，因为两者在 {@code beginFrame} 里相邻赋值），
      * 并且**排在本流全部 {@code advance} 之后**才自洽：{@code advance} 里的 {@link #acquire} 会当场
      * 回填本帧的戳，晚一步发射就能看见"这一帧刚被锁走的那些"，否则同一帧会朝同一只出两枚。
      *
@@ -322,7 +339,7 @@ public final class MissileBehavior {
         if (launchCos2 < 0f) {
             throw new IllegalStateException("MissileBehavior.beginFrame was not called this frame");
         }
-        float maxD2 = spec.dogfightRange * spec.dogfightRange;
+        float maxD2 = launchRange * launchRange;
         int best = -1;
         float bestD2 = Float.MAX_VALUE;
         for (int i = 0; i < foes.activeCount(); i++) {

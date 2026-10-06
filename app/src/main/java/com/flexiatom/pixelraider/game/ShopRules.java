@@ -166,7 +166,7 @@ public final class ShopRules {
             case Balance.ShopCard.IGNITION: return k.seekerRangePerLevel;
             case Balance.ShopCard.HANDLING: return k.seekerArcDegPerLevel;
             // 格斗导弹有两档（2026-10-06），但"每级的量"这件事在它身上**不成立**：一级给的是流本身、
-            // 二级一次给两样（夹角 60°→100° 加过载翻倍），没有一个"×等级"的线性读数可印。
+            // 二级一次给三样（夹角 60°→125°、半径 50→70、过载翻倍），没有一个"×等级"的线性读数可印。
             // 印 0 而不是硬挑一个数，是为了不让卡面拿半条改动冒充整张卡（那两档的字面值在 Balance.Missile）。
             case Balance.ShopCard.DOGFIGHT: return 0f;
             // 两张武器解锁卡（2026-10-02）与中段引导同形：卖的是"这一把在不在飞机上"，没有量。
