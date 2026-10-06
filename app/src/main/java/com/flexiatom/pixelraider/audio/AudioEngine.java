@@ -82,6 +82,9 @@ public final class AudioEngine implements Game.Audio {
     private final Executor gen = Executors.newSingleThreadExecutor();
     private final File dir;
     private final int[] soundIds = new int[AudioCues.COUNT];
+    /** 只喂 {@code Log.i} 的读数（见 {@link #install()} 的注释）；回调在主线程，无需同步。 */
+    private int loadedCount;
+    private long loadStartedAt;
 
     private SoundPool playerPool;
     private SoundPool worldPool;
@@ -103,17 +106,42 @@ public final class AudioEngine implements Game.Audio {
         this.volume = percent / 100f;
     }
 
-    /** 启动期一次性生成 + 装载。必须在主线程调（{@code SoundPool} 要 Looper 装它的回调）。 */
+    /**
+     * 启动期一次性生成 + 装载。必须在主线程调（{@code SoundPool} 要 Looper 装它的回调）。
+     *
+     * <p>里面那几条 {@code Log.i} 不是调试残渣，是 P2 唯一的读数出口：这一格错掉的现场表现是**全程无声**
+     * （{@code load()} 返回 0、{@code play()} 静默 return），屏幕上量不出任何东西。
+     *
+     * <p>读数口径：{@code 新建 n/29} 里的 n 才是"合成 + 写盘"那一遍，缓存命中的一只不求值波形。
+     * 所以 warm 启动该看到 {@code 新建 0/29} 且 ms 接近 0（只剩 29 次 stat 加一遍目录），
+     * 要是 warm 也花上秒级，就是有人在 {@code isCached} 之前把 {@code render} 求了出来。
+     */
     public void install() {
         gen.execute(() -> {
+            long t0 = System.nanoTime();
             try {
                 if (!dir.isDirectory()) dir.mkdirs();
+                int total = AudioCues.COUNT + MusicBank.TRACK_COUNT;
+                int cached = 0;
                 for (int cue = 0; cue < AudioCues.COUNT; cue++) {
-                    writeIfMissing(AudioCues.fileNameOf(cue), CueBank.render(cue));
+                    String name = AudioCues.fileNameOf(cue);
+                    if (isCached(name)) {
+                        cached++;
+                    } else {
+                        writeWav(name, CueBank.render(cue));
+                    }
                 }
                 for (int track = 0; track < MusicBank.TRACK_COUNT; track++) {
-                    writeIfMissing(AudioCues.bgmFileNameOf(track), MusicBank.render(track));
+                    String name = AudioCues.bgmFileNameOf(track);
+                    if (isCached(name)) {
+                        cached++;
+                    } else {
+                        writeWav(name, MusicBank.render(track));
+                    }
                 }
+                long ms = (System.nanoTime() - t0) / 1_000_000L;
+                android.util.Log.i("PixelRaider", "audio gen " + ms + "ms 新建 " + (total - cached) + "/" + total
+                        + " 个, " + dirBytes() + " B");
                 main.post(this::loadAll);
             } catch (Exception e) {
                 android.util.Log.w("PixelRaider", "audio generation failed, staying silent", e);
@@ -121,20 +149,47 @@ public final class AudioEngine implements Game.Audio {
         });
     }
 
-    private void writeIfMissing(String name, float[] wave) throws java.io.IOException {
+    private boolean isCached(String name) {
         File f = new File(dir, name + ".wav");
-        if (f.isFile() && f.length() > 44L) return;
-        WavSink.writeMonoS16(f, wave);
+        return f.isFile() && f.length() > 44L;
+    }
+
+    private void writeWav(String name, float[] wave) throws java.io.IOException {
+        WavSink.writeMonoS16(new File(dir, name + ".wav"), wave);
+    }
+
+    private long dirBytes() {
+        File[] fs = dir.listFiles();
+        long sum = 0;
+        if (fs != null) {
+            for (File f : fs) sum += f.length();
+        }
+        return sum;
     }
 
     private void loadAll() {
         if (ready) return;
         playerPool = newPool(PLAYER_STREAMS);
         worldPool = newPool(WORLD_STREAMS);
+        // 解码完成是异步的：26 条全到齐才打一行，否则一次装机刷 26 行日志
+        SoundPool.OnLoadCompleteListener onLoaded = (pool, sampleId, status) -> {
+            if (++loadedCount == AudioCues.COUNT) {
+                android.util.Log.i("PixelRaider", "sfx decoded " + loadedCount + "/" + AudioCues.COUNT
+                        + " in " + (System.nanoTime() - loadStartedAt) / 1_000_000L + "ms");
+            }
+        };
+        playerPool.setOnLoadCompleteListener(onLoaded);
+        worldPool.setOnLoadCompleteListener(onLoaded);
+        loadStartedAt = System.nanoTime();
+        int refused = 0;
         for (int cue = 0; cue < AudioCues.COUNT; cue++) {
             SoundPool pool = AudioCues.busOf(cue) == AudioCues.BUS_WORLD ? worldPool : playerPool;
             soundIds[cue] = pool.load(new File(dir, AudioCues.fileNameOf(cue) + ".wav").getAbsolutePath(),
                     AudioCues.priorityOf(cue));
+            if (soundIds[cue] == 0) refused++;
+        }
+        if (refused > 0) {
+            android.util.Log.w("PixelRaider", refused + " 只 wav 被 SoundPool 当场拒收（load 返回 0）");
         }
         bgm = new MediaPlayer();
         bgm.setAudioAttributes(new AudioAttributes.Builder()
@@ -142,8 +197,13 @@ public final class AudioEngine implements Game.Audio {
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build());
         bgm.setLooping(true);
+        bgm.setOnErrorListener((mp, what, extra) -> {
+            android.util.Log.w("PixelRaider", "BGM 出错 what=" + what + " extra=" + extra);
+            return true;
+        });
         ready = true;
-        setBgm(AudioCues.BGM_MENU);
+        // 这里**不**替游戏挑轨：装载完可能已经过了好几帧，硬写 BGM_MENU 会把游戏实际所在的那条轨盖掉。
+        // 轨号只有一个真源——Game 每帧推的那一次（未 ready 期间的推送在 setBgm 里被丢掉，不记账）。
     }
 
     /**
@@ -183,7 +243,9 @@ public final class AudioEngine implements Game.Audio {
 
     @Override
     public void setBgm(int track) {
-        if (track == bgmTrack) return;
+        // 未 ready 时**不记账**：这一格真发生过——装载要 1.2 s，期间游戏已经在推轨号；先记下 MENU
+        // 再让装载完成后的第一次同轨推送走"同轨早退"，BGM 就永远不 started，全程无声且无提示。
+        if (!ready || track == bgmTrack) return;
         bgmTrack = track;
         main.post(() -> startBgm(track));
     }
