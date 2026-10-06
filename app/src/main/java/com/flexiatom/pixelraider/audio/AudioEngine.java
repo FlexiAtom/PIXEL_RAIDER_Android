@@ -32,8 +32,13 @@ import com.flexiatom.pixelraider.game.Game;
 import com.flexiatom.pixelraider.plat.KeyValue;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * 播放面（规格 §七 :290-:295 在 P2 路线下的兑现）。
@@ -47,9 +52,11 @@ import java.util.concurrent.Executors;
  * <ul>
  *   <li><b>混音交给系统</b>：并发、解码、抢占、单声部音量全在 {@code SoundPool} 侧，本类每帧只做一个
  *       int 自减（配额）。上游那 6 格语音池与求和循环<b>不抄</b>——那是 §七 :290 让系统做的那件事。</li>
- *   <li><b>生成在后台线程</b>：26 只音效 + 3 条 BGM 的合成本机实算 ≈110～135 ms，塞进首帧就是白屏一下。
+ *   <li><b>生成在后台、并且并行</b>：29 个工作项零共享（各持自己的振荡器、自己的 {@code float[]}、自己的文件），
+ *       所以直接摆到 {@value #GEN_MAX_WORKERS} 个 worker 上用一次 {@code invokeAll} 收。真机（MT6835）实算
+ *       cold 2482 ms／warm 6 ms —— 放后台是为了不塞首帧，<b>压 cold 是为了首声早点到</b>，与帧率无关。
  *       生成完才 {@code load}，之前 {@link #play} 静默返回（不炸、也不假装响过）。
- *       低端 ARM 上那一格<b>未实测</b>；同版本目录里已有完整文件时整段跳过，二次启动不付这笔。</li>
+ *       同版本目录里已有完整文件时整段跳过，二次启动不付这笔。</li>
  *   <li><b>任何 IO 失败就地转静音</b>（上游 mod.rs 的降级纪律）：写盘失败只意味着没声音，
  *       不允许把异常抛进渲染线程——那会把"音频没配上"升级成"游戏崩了"。</li>
  * </ul>
@@ -72,6 +79,12 @@ public final class AudioEngine implements Game.Audio {
 
     /** 规格 §七 :291 的 -6dB 已经烘进样本，这里只留一个焦点闪避的乘子。 */
     private static final float DUCK_GAIN = 0.3f;
+
+    /**
+     * 生成侧的并行上限。夹 4 而不是跟着核数走：这机器是 2×A76 + 6×A55，第 5 条线程起就在慢核上排队，
+     * 而每只波形都要独占一整段 {@code float[]}——多开只涨堆峰值，不涨墙钟。
+     */
+    private static final int GEN_MAX_WORKERS = 4;
 
     private static final String KEY_MUTED = "audio_muted";
     private static final String KEY_VOLUME = "audio_volume_percent";
@@ -112,41 +125,53 @@ public final class AudioEngine implements Game.Audio {
      * <p>里面那几条 {@code Log.i} 不是调试残渣，是 P2 唯一的读数出口：这一格错掉的现场表现是**全程无声**
      * （{@code load()} 返回 0、{@code play()} 静默 return），屏幕上量不出任何东西。
      *
-     * <p>读数口径：{@code 新建 n/29} 里的 n 才是"合成 + 写盘"那一遍，缓存命中的一只不求值波形。
+     * <p>读数口径：{@code 新建 n/29} 里的 n 才是"合成 + 写盘"那一遍，缓存命中的一只不求值波形；
+     * 行尾的 {@code [Nw]} 是这一遍用了几个 worker，没有它下次读到的 ms 无法归因。
      * 所以 warm 启动该看到 {@code 新建 0/29} 且 ms 接近 0（只剩 29 次 stat 加一遍目录），
-     * 要是 warm 也花上秒级，就是有人在 {@code isCached} 之前把 {@code render} 求了出来。
+     * 要是 warm 也花上秒级，就是有人在缓存判断之前把 {@code render} 求了出来。
      */
     public void install() {
         gen.execute(() -> {
             long t0 = System.nanoTime();
+            int total = AudioCues.COUNT + MusicBank.TRACK_COUNT;
+            int workers = Math.max(1, Math.min(GEN_MAX_WORKERS,
+                    Runtime.getRuntime().availableProcessors() - 1));
+            ExecutorService pool = Executors.newFixedThreadPool(workers);
             try {
                 if (!dir.isDirectory()) dir.mkdirs();
-                int total = AudioCues.COUNT + MusicBank.TRACK_COUNT;
-                int cached = 0;
-                for (int cue = 0; cue < AudioCues.COUNT; cue++) {
-                    String name = AudioCues.fileNameOf(cue);
-                    if (isCached(name)) {
-                        cached++;
-                    } else {
-                        writeWav(name, CueBank.render(cue));
-                    }
+                List<Callable<Boolean>> jobs = new ArrayList<>(total);
+                for (int i = 0; i < total; i++) {
+                    final int job = i;
+                    jobs.add(() -> generateOne(job));
                 }
-                for (int track = 0; track < MusicBank.TRACK_COUNT; track++) {
-                    String name = AudioCues.bgmFileNameOf(track);
-                    if (isCached(name)) {
-                        cached++;
-                    } else {
-                        writeWav(name, MusicBank.render(track));
-                    }
-                }
+                int written = 0;
+                for (Future<Boolean> f : pool.invokeAll(jobs)) written += f.get() ? 1 : 0;
                 long ms = (System.nanoTime() - t0) / 1_000_000L;
-                android.util.Log.i("PixelRaider", "audio gen " + ms + "ms 新建 " + (total - cached) + "/" + total
-                        + " 个, " + dirBytes() + " B");
+                android.util.Log.i("PixelRaider", "audio gen " + ms + "ms 新建 " + written + "/" + total
+                        + " 个, " + dirBytes() + " B [" + workers + "w]");
                 main.post(this::loadAll);
             } catch (Exception e) {
                 android.util.Log.w("PixelRaider", "audio generation failed, staying silent", e);
+            } finally {
+                pool.shutdown();
             }
         });
+    }
+
+    /**
+     * 生成第 {@code job} 只（编号 &lt; {@link AudioCues#COUNT} 是音效，其余是 BGM 轨）。
+     *
+     * <p>缓存判断与合成本就在同一次调用里，所以并行的那一格不需要把配方表跨线程传出去；返回"这次真写了盘"，
+     * 只给上面那行读数数数用。各 job 之间零共享可变状态：每只自己 new 振荡器、自己一段 {@code float[]}、
+     * 自己一个文件，目录早在提交任务前就 mkdir 过了。
+     */
+    private boolean generateOne(int job) throws java.io.IOException {
+        boolean music = job >= AudioCues.COUNT;
+        String name = music ? AudioCues.bgmFileNameOf(job - AudioCues.COUNT)
+                : AudioCues.fileNameOf(job);
+        if (isCached(name)) return false;
+        writeWav(name, music ? MusicBank.render(job - AudioCues.COUNT) : CueBank.render(job));
+        return true;
     }
 
     private boolean isCached(String name) {
