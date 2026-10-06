@@ -33,6 +33,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 
+import com.flexiatom.pixelraider.audio.AudioEngine;
 import com.flexiatom.pixelraider.core.InputRouter;
 import com.flexiatom.pixelraider.game.Game;
 import com.flexiatom.pixelraider.gfx.TextCache;
@@ -55,6 +56,8 @@ public final class MainActivity extends ComponentActivity {
     private android.media.AudioManager audio;
     private boolean hasAudioFocus;
     private android.media.AudioFocusRequest focusRequest;
+    /** 播放面。与触觉同一条边界：Game 只认接口，android 媒体栈住在这里（规格 §八）。 */
+    private AudioEngine engine;
     /** 落盘出口要留着，销毁时才能等它把挂起的写做完（规格 §八 的单线程池）。 */
     private AsyncKeyValue store;
     /** 只有 debug 包带作弊键（F9 立即结算），release 包里这个键不拦截、照常交给系统。 */
@@ -97,6 +100,11 @@ public final class MainActivity extends ComponentActivity {
         // 触觉只以接口形式进 Game：渲染线程拿不到 Context，也不该拿到（规格 §八 的边界）
         game.setHaptics(new HapticPump(new Vibrate(this)));
         audio = (android.media.AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        // 播放面（P2：启动期由代码合成 wav → 两个 SoundPool）。那笔合成排在后台线程上，
+        // 生成完才装载；在那之前 play() 静默返回，所以首帧不会为了出声白屏一下。
+        engine = new AudioEngine(this, store);
+        game.setAudio(engine);
+        engine.install();
 
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             applyInsets(WindowInsetsCompat.toWindowInsetsCompat(insets, v));
@@ -362,6 +370,8 @@ public final class MainActivity extends ComponentActivity {
         super.onPause();
         game.input().offerLogic(InputRouter.EV_PAUSE, -1, 0, 0, 0);
         surface.setRenderPaused(true);
+        // 规格 §七 :295：后台不留声音。渲染冻了而 SoundPool 还在响，等于"切出去还能听见枪声"。
+        if (engine != null) engine.pauseAll();
         abandonAudioFocus();
     }
 
@@ -370,6 +380,7 @@ public final class MainActivity extends ComponentActivity {
         super.onResume();
         surface.setRenderPaused(false);
         requestAudioFocus();
+        if (engine != null) engine.resumeAll();
         game.input().offerLogic(InputRouter.EV_RESUME, -1, 0, 0, 0);
         // 后台回来的首帧 delta 是几十秒，单独钉死（§零）
         game.time().forceNextFrameToOneStep();
@@ -379,6 +390,7 @@ public final class MainActivity extends ComponentActivity {
     protected void onDestroy() {
         super.onDestroy();
         abandonAudioFocus();
+        if (engine != null) engine.shutdown();
         // 渲染线程在 surfaceDestroyed 里已经 joined，此刻不会再有人写：等挂起的落盘走完
         store.shutdown();
     }
@@ -395,9 +407,13 @@ public final class MainActivity extends ComponentActivity {
         if (audio == null || hasAudioFocus) return;
         int res;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // ⚠ listener 必须挂在 builder 上：O+ 走的是 requestAudioFocus(focusRequest) 那一条重载，
+            // 旧构造里传的那个 listener 根本不参与。少了这一句，API 26+ 上永远收不到回调
+            // ——下面那句"真正的闪避在这里"在绝大多数现役机器上是一次都不会执行的死码。
             focusRequest = new android.media.AudioFocusRequest.Builder(
                     android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                     .setWillPauseWhenDucked(false)
+                    .setOnAudioFocusChangeListener(focusListener)
                     .build();
             res = audio.requestAudioFocus(focusRequest);
         } else {
@@ -409,10 +425,11 @@ public final class MainActivity extends ComponentActivity {
 
     private final android.media.AudioManager.OnAudioFocusChangeListener focusListener =
             change -> {
-                // 来电/他人音乐：S6 接音频总线时在这里做真正的 duck/pause
-                if (change != android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-                    hasAudioFocus = false;
-                }
+                // 来电/他人音乐：只闪避，不停止。请求的是 TRANSIENT_MAY_DUCK，所以"被抢走"这一族
+                // 在语义上就是"压低"，不是"结束"；真到退出前台那一步有 onPause 那条路（§七 :295）。
+                boolean granted = change == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+                hasAudioFocus = granted;
+                if (engine != null) engine.setDucked(!granted);
             };
 
     @SuppressWarnings("deprecation")

@@ -79,6 +79,35 @@ public final class Game implements GameThread.Host {
         void tick();
     }
 
+    /**
+     * 音频回调。和 {@link Haptics} 同一档理由：住在 game 侧由 plat 实现，本类因此不 import
+     * android 的媒体栈（规格 §八 的逻辑核／平台层解耦）。
+     *
+     * <p>三个方法各自守一条硬要求（规格 §六/§七，2026-10-05 裁定读成"行为"而非 API 名）：
+     * {@link #beginFrame()} 归零**每帧新增配额**——{@code step()} 一帧可能跑 0..N 次，
+     * 配额挂在帧上而不是步上；{@link #play(int)} 收 {@link AudioCues} 的事件 id，播放面自己
+     * 决定它去哪条总线；{@link #setBgm(int)} 换轨即从头循环，**没有交叉淡入**（§七 :294 已作废）。
+     */
+    public interface Audio {
+        void beginFrame();
+
+        void play(int cue);
+
+        void setBgm(int track);
+
+        /** 未接线时的出口，形状同 {@code KeyValue.EMPTY}：二十来个站点因此都不用 null 判。 */
+        Audio NONE = new Audio() {
+            @Override public void beginFrame() {
+            }
+
+            @Override public void play(int cue) {
+            }
+
+            @Override public void setBgm(int track) {
+            }
+        };
+    }
+
     private static final int MARGIN = 16;
     /** 中文 UI 字号：8px 是可读下限（规格 §三），再小就得靠抗锯齿烘焙救。 */
     /** 战场上的中文读数（波次名、Boss 名、状态名）走内嵌像素中文，只能是 12 的整数倍。 */
@@ -188,6 +217,8 @@ public final class Game implements GameThread.Host {
     private float fxClock;
 
     private Haptics haptics;
+    /** 播放面。默认 {@link Audio#NONE}，所以 26 个站点都不用判空（形状同 {@code KeyValue.EMPTY}）。 */
+    private Audio audio = Audio.NONE;
 
     private final Paint fill = new Paint();
     private final Paint stroke = new Paint();
@@ -354,6 +385,11 @@ public final class Game implements GameThread.Host {
         haptics = h;
     }
 
+    /** 注入播放面。传 null 等于退回静音出口，不是"关掉音频"——真正的开关是 {@code setMuted}。 */
+    public void setAudio(Audio a) {
+        audio = a == null ? Audio.NONE : a;
+    }
+
     /**
      * 注入落盘出口并在同一时刻读回持久状态。只在启动时（surface 建立之前）由 plat 调一次——
      * 晚调等于渲染线程可能已经在读一份没 load 过的纪录表。
@@ -518,6 +554,9 @@ public final class Game implements GameThread.Host {
 
     @Override
     public void frame(float deltaSeconds, Canvas canvas) {
+        // 配额挂在**帧**上而不是步上：下面那个 for 一帧能跑 0..N 步，在步里归零等于
+        // "补帧的那几步各自有 10 声额度"，一次卡顿会放出几十声。
+        audio.beginFrame();
         // 输入**每帧一次、必须在 advance 之前**：Time 一被 setPaused(true) 就返回 0 步，
         // 挪进步骤循环等于按下暂停那一刻起再也收不到任何事件——面板上的"继续作战"永远点不动。
         consumeInput();
@@ -535,7 +574,25 @@ public final class Game implements GameThread.Host {
             onScheduled(firedCommands[i]);
         }
         probe.end(FrameProbe.STEP);
+        audio.setBgm(bgmTrackNow());
         render(canvas);
+    }
+
+    /**
+     * 这一帧该放哪条 BGM。每帧重算、不追边沿：三条轨的归属完全由"栈顶是哪一屏 + 正在打的
+     * 是不是 Boss 波"派生，而"同轨不动"那一条判断只有一份、住在播放面那边。
+     *
+     * <p>暂停/商店/调试**不改轨**（它们是"打到一半"）：换轨在听觉里就是"这一局结束了"的信号，
+     * 按一次暂停就听见一次终局是假话。主菜单、成长页、图鉴、设置、结算页归到同一条 MENU 轨——
+     * 那五屏都是"没在打"。
+     */
+    private int bgmTrackNow() {
+        int top = modals.peek();
+        if (top == ModalStack.MENU || top == ModalStack.GROWTH || top == ModalStack.RESULT
+                || top == ModalStack.CODEX || top == ModalStack.SETTINGS) {
+            return AudioCues.BGM_MENU;
+        }
+        return wave.currentWaveIsBoss() ? AudioCues.BGM_BOSS : AudioCues.BGM_PLAY;
     }
 
     // ---- 输入 -------------------------------------------------------------------------------
@@ -672,6 +729,9 @@ public final class Game implements GameThread.Host {
     private void maybeOpenShop() {
         int ph = wave.phase();
         if (ph != WaveFlow.INTERMISSION) {
+            // 间歇 → 下一波出怪那条边沿就是"新一波开始了"：商店关掉之后玩家听见的第一声。
+            // 第一波不走这里（{@code resetRun} 把基准钉在 PREP，开局那一声归 RUN_START）。
+            if (lastFlowPhase == WaveFlow.INTERMISSION) audio.play(AudioCues.WAVE_START);
             lastFlowPhase = ph;
             shopPending = false;
             return;
@@ -795,6 +855,7 @@ public final class Game implements GameThread.Host {
         int price = ShopRules.nextPrice(card, shopSnap);
         if (!shopRun.buyUpgrade(id)) return;
         coins -= price;
+        audio.play(AudioCues.BUY);
         applyShopUpgrade(id);
         fillShopSnapshot();
     }
@@ -1123,8 +1184,14 @@ public final class Game implements GameThread.Host {
      */
     private void selectWeapon(int id) {
         if (id < 0 || id >= Balance.weapons.length || id == player.weaponId) return;
-        if (!shopRun.weaponUnlocked(id)) return;
+        if (!shopRun.weaponUnlocked(id)) {
+            // 按了一把没买过的枪：这一声是这个闸门的**可听出口**。面板把没持有的那几格灰掉，
+            // 但键盘 1..6 没有灰可看——没有这一声，"买了没有"只有切过去才知道。
+            audio.play(AudioCues.DENIED);
+            return;
+        }
         player.weaponId = id;
+        audio.play(AudioCues.WEAPON_SWITCH);
         if (haptics != null) haptics.tick();
     }
 
@@ -1277,6 +1344,7 @@ public final class Game implements GameThread.Host {
         e.y = battleTop - 20f;
         e.locked = false;
         e.fireTimer = spec.fireGap;
+        audio.play(AudioCues.BOSS_SPAWN);
         if (haptics != null) haptics.heavyClick();
     }
 
@@ -1323,6 +1391,7 @@ public final class Game implements GameThread.Host {
         // 敌弹在出膛的下一帧就被判过期，屏幕上永远看不到一发。
         b.maxLife = Balance.bullet.hostileLife;
         b.crit = false;
+        audio.play(AudioCues.ENEMY_FIRE);
     }
 
     private void fireBossVolley(Enemies.Enemy e, Balance.Boss spec) {
@@ -1342,6 +1411,7 @@ public final class Game implements GameThread.Host {
             b.maxLife = Balance.bullet.bossLife;
             b.crit = false;
         }
+        audio.play(AudioCues.ENEMY_FIRE);
         if (haptics != null) haptics.tick();
     }
 
@@ -1412,8 +1482,27 @@ public final class Game implements GameThread.Host {
     private void stepChain(float dt) {
         int made = chain.step(dt, player.x, noseY(), shots, missiles);
         // 记账挪到**实际出膛**处：计划发数与真的打进池里的发数从此不可能对不上。
-        if (made > 0) stats.addShots(made);
+        if (made > 0) {
+            stats.addShots(made);
+            // 一帧一声，不按发出几声响几次：散射一档一帧能排五发，逐发响等于把开火听成一串炸豆。
+            audio.play(fireCueOf(chain.generationWeaponId()));
+        }
         stepEvictions();
+    }
+
+    /**
+     * 枪种 → 开火声。读的是**代内冻结**的武器号（{@link BulletChain#generationWeaponId}），
+     * 不是 {@code player.weapon()}：链横跨多帧，换枪那一帧会把新枪的声音安到上一代的弹上。
+     */
+    private static int fireCueOf(int weaponId) {
+        return switch (weaponId) {
+            case Balance.Weapon.LASER -> AudioCues.FIRE_LASER;
+            case Balance.Weapon.SHOT -> AudioCues.FIRE_SPREAD;
+            case Balance.Weapon.MISSILE -> AudioCues.MISSILE_LAUNCH;
+            case Balance.Weapon.ARC -> AudioCues.FIRE_ARC;
+            case Balance.Weapon.BOOMER -> AudioCues.FIRE_SPIN;
+            default -> AudioCues.FIRE_PULSE;
+        };
     }
 
     /**
@@ -1514,6 +1603,8 @@ public final class Game implements GameThread.Host {
         designatedSlot = radarSlots[hit];
         Enemies.Enemy picked = enemies.objAt(designatedSlot);
         designatedBorn = picked == null ? 0L : picked.born;
+        // 指到才响：那一格 `hit < 0` 的出口是"清了指定"，给声音等于告诉玩家"点中了什么"。
+        audio.play(AudioCues.RADAR_CUE);
         if (haptics != null) haptics.tick();
     }
 
@@ -1556,6 +1647,8 @@ public final class Game implements GameThread.Host {
             Missiles.Missile m = pool.activeAt(i);
             int flags = behavior.advance(m, spec, dt, enemies,
                     Screen.LOGIC_W, metrics.logicH, MARGIN);
+            // 只认第一次开眼：FLAG_RELOCKED 是"换了一只"，同一枚弹连响两声会听成两枚。
+            if ((flags & MissileBehavior.FLAG_ACQUIRED) != 0) audio.play(AudioCues.LOCK_ON);
             // 三路同归一条引爆（方案里编号 R13）：出处 = 记录 L14773 answers-OPT，
             // UTC 2026-09-25T09:29:00.463Z = 本地 2026-09-25 17:29:00，选项标签「自爆也展开，与撞敌同路」
             // ⇒ 选这一档是他的决定，但这句标签是我的措辞。三路合流后差别只在**记账**——撞敌/引信算这一发
@@ -1596,6 +1689,7 @@ public final class Game implements GameThread.Host {
         // 记账：**出膛一笔**，与 chain.step 那条同一个口径（少这一笔 addHit 就大过 addShots，
         // 结算页会安静显示命中率 100%，全链路不红）。
         stats.addShots(1);
+        audio.play(AudioCues.MISSILE_DOGFIGHT);
         stepDogEvictions();
     }
 
@@ -1672,6 +1766,7 @@ public final class Game implements GameThread.Host {
         if (e == null || e.hp <= 0) return;
         e.hp -= DamageRules.resolve(bodySource, DamageRules.ARMOR_REGULAR, m.damage);
         e.hitFlash = 0.09f;
+        audio.play(AudioCues.ENEMY_HIT);
         if (e.hp <= 0) killEnemy(e, m.crit);
     }
 
@@ -1746,6 +1841,9 @@ public final class Game implements GameThread.Host {
      */
     private void settleContact(Warheads.Warhead w) {
         int mask = WarheadRules.takeContact(w);
+        // 一根杆一个 tick 一声，不按"这一 tick 咬住几只"响几只：同时咬四只会放四声同样的撕开，
+        // 听着像炸豆。碎片不响——它是一根杆的余势，六片各叫一声等于把一次解体放成六次。
+        if (mask != 0 && w.kind == Warheads.Warhead.KIND_ROD) audio.play(AudioCues.ROD_TEAR);
         while (mask != 0) {
             int slot = Integer.numberOfTrailingZeros(mask);
             mask &= ~(1 << slot);
@@ -1792,6 +1890,7 @@ public final class Game implements GameThread.Host {
             hit.hp -= dmg;
             hit.hitFlash = 0.09f;
             spawnSpark(b.x, b.y, b.color, b.crit);
+            audio.play(AudioCues.ENEMY_HIT);
             if (hit.hp <= 0) killEnemy(hit, b.crit);
             shots.killAt(i);
         }
@@ -1861,10 +1960,12 @@ public final class Game implements GameThread.Host {
             shake = 1f;
             hitStop.arm(HitStop.secondsFor(1f));
             sweepFlash = 0.5f;
+            audio.play(AudioCues.BOSS_KILL);
             if (haptics != null) haptics.heavyClick();
         } else {
             shake = Math.max(shake, 0.28f);
             hitStop.arm(HitStop.secondsFor(0.35f));
+            audio.play(AudioCues.KILL);
         }
     }
 
@@ -1940,6 +2041,8 @@ public final class Game implements GameThread.Host {
             }
             stats.powerupsTaken += collected[Drops.POWERUP];
             collected[Drops.POWERUP] = 0;
+            // 一帧捡到多枚也只响一声（与触觉同一个口径）：那是"这一帧收到了"的事件，不是逐枚计数。
+            audio.play(AudioCues.POWERUP);
             if (haptics != null) haptics.heavyClick();
         }
     }
@@ -1953,6 +2056,7 @@ public final class Game implements GameThread.Host {
         hitStop.arm(HitStop.secondsFor(heavy ? 0.8f : 0.4f));
         spawnBurst(player.x, player.y, heavy ? 20 : 10,
                 (flags & PlayerState.FLAG_SHIELD_BROKEN) != 0 ? Ink.SHIELD : Ink.WARN);
+        if ((flags & PlayerState.FLAG_SHIELD_BROKEN) != 0) audio.play(AudioCues.SHIELD_BREAK);
         if (haptics != null) haptics.heavyClick();
         if ((flags & PlayerState.FLAG_DIED) != 0) onPlayerDied();
     }
@@ -1962,6 +2066,7 @@ public final class Game implements GameThread.Host {
         shake = 1f;
         sweepFlash = 0.6f;
         spawnBurst(player.x, player.y, 48, Ink.PROBE);
+        audio.play(AudioCues.PLAYER_DEATH);
         if (haptics != null) haptics.heavyClick();
         settleRun(false);
     }
@@ -2047,6 +2152,8 @@ public final class Game implements GameThread.Host {
             if (e.hp <= 0) killEnemy(e, false);
         }
         hostile.clear();
+        // 横扫只放一声：逐只补 ENEMY_HIT 会把 26 声同一个音挤进同一帧，听着像炸豆而不是"清屏"。
+        audio.play(AudioCues.OVERLOAD);
         if (haptics != null) haptics.heavyClick();
     }
 
@@ -2071,6 +2178,7 @@ public final class Game implements GameThread.Host {
         sweepFlash = 1f;
         shake = 1f;
         hitStop.arm(HitStop.secondsFor(0.9f));
+        audio.play(AudioCues.ITEM_BOMB);
         if (haptics != null) haptics.heavyClick();
     }
 
@@ -2141,6 +2249,9 @@ public final class Game implements GameThread.Host {
         anchorX = player.x;
         anchorY = player.y;
         wave.reset();
+        // 开新局的声音挂在**这一格**而不是那三个调用点（重开/重试/菜单开局）：它们是同一个事件的
+        // 三个入口，写三处就有第四处漏掉的那天。冷启动那一次多半听不见——播放面还没 ready。
+        audio.play(AudioCues.RUN_START);
     }
 
     // ---- 特效 -------------------------------------------------------------------------------
@@ -2155,6 +2266,9 @@ public final class Game implements GameThread.Host {
      * 他给的只有「哑火」「小烟」这两个词。
      */
     private void spawnMisfire(float x, float y) {
+        // 出声挂在这一格里，两条淘汰池因此共用同一个上限：每帧每池最多一声（配额 10 的小份额）。
+        // 它排在粒子判满之前是有意的——"这一枚被踢了"这件事已经发生，烟挤掉了不该连声音一起吞。
+        audio.play(AudioCues.MISFIRE);
         for (int i = 0; i < 5; i++) {
             Particle p = particles.spawn();
             if (p == null) return;

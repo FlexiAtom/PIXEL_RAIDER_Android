@@ -353,6 +353,16 @@ public final class BulletChain {
         return made;
     }
 
+    /**
+     * 这一代弹的武器号（{@link #tpl} 里那份冻结值）。给 Game 侧按枪种出声用——那边不许读
+     * {@code player.weapon()}：链横跨多帧，换枪那一帧读到的新枪会被安到上一代排出的弹上。
+     *
+     * <p>只在 {@link #step} 返回 &gt; 0 之后读才有意义：那时代模板正是刚出膛的这一代。
+     */
+    public int generationWeaponId() {
+        return tpl.weaponId;
+    }
+
     /** 清场：换局用。已经出膛的弹不归这里管（它们在池里）。 */
     public void clear() {
         next = slots;
