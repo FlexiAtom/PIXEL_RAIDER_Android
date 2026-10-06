@@ -145,6 +145,10 @@ public final class MissileBehavior {
      * 格斗弹**发射扇形**的半角余弦平方：{@link #tryLaunch} 的判据，也是格斗流 {@link #seekerCos2}
      * 的值。他的字是「机头前半径50、圆心角60度的扇形」——**一条**扇形，发射与发射后的导引共用它，
      * 所以这里只换算一次，两处的值结构性相同。
+     *
+     * <p>2026-10-06 起它是**按档解析**的：一级 60°、二级 100°（{@code ShopRun.dogfightTier2()}），
+     * 但"一条扇形两处共用"这条没变——跳档时发射判据与飞行段导引头一起跳，不会出现"出得了弹却追不上"
+     * 那种两半错开的档。
      */
     private float launchCos2 = -1f;
     private float balanceSpeed = -1f;
@@ -240,19 +244,25 @@ public final class MissileBehavior {
         // 射前锥**不跟涨**：它的半角是 L38831 那句「无限长半径的扇形区域」里的形状，本来就没有
         // 半径可言，把机动过载卡的角度加成加在它上面会让"能不能出弹"变成成长量——那是另一件事。
         radarCos2 = cos2(spec.radarHalfDeg);
-        // 格斗弹的发射扇形同样不跟涨（理由与上一条同形，见 Balance.Missile.dogfightHalfDeg 那条口径）：
-        // 让成长卡决定"能不能自动出弹"是另一件事，本仓今天没有那张卡。
-        launchCos2 = cos2(spec.dogfightHalfDeg);
+        // 格斗弹的发射扇形只吃**自己那张卡的第二档**，不吃别人的（2026-10-06 他逐字
+        // 「加个二级卡，加大发射扇形总夹角到100°并给转弯率翻倍」）：
+        // 「机动过载」「二次点火」那两条加成仍然够不着这里——那是导引头的名词，与发射判据是两个字段
+        // （见 {@link Balance.Missile#dogfightHalfDeg} 与 {@link Balance.Missile#seekerHalfDeg} 那条口径）。
+        // 换句话说"能不能自动出弹"今天确实是成长量了，但**只有这张卡自己能把它抬**，一条流一个商品位。
+        launchCos2 = cos2(run.dogfightTier2() ? spec.dogfightHalfDegTier2 : spec.dogfightHalfDeg);
         balanceSpeed = spec.thrust / spec.dragK;
         if (stream == STREAM_DOGFIGHT) {
-            // 它吃到的**只有**最大过载那一条卡（他的字「自带高过载…并且能叠加最大过载卡」）。
-            // 二次点火那两条落点在它身上不存在：它的导引头从**装配那一刻**就开着（锁与开眼都由
-            // {@link #armDogfight} 在出膛同帧写好，{@link #tryLaunch} 那条扇形就是它的视野），
-            // 而机动过载卖的是**导引头**的夹角与**导引头**的半径——
-            // 那是普通弹"开眼之后"的那条扇形，与格斗弹发射判据这条是两个名词、两个字段。
+            // 它吃到的卡有两条腿：**最大过载**那条（他的字「自带高过载…并且能叠加最大过载卡」）与
+            // 自己这张卡的二级（{@link ShopRun#dogfightTier2()}）。二次点火那两条落点在它身上不存在：
+            // 它的导引头从**装配那一刻**就开着（锁与开眼都由 {@link #armDogfight} 在出膛同帧写好，
+            // {@link #tryLaunch} 那条扇形就是它的视野），而机动过载卖的是**导引头**的夹角与
+            // **导引头**的半径——那是普通弹"开眼之后"的那条扇形，与格斗弹发射判据这条是两个名词、两个字段。
             seekerCos2 = launchCos2;
-            seekerRangeEff = spec.dogfightRange;
-            maxLatAccelEff = spec.dogfightLatAccel + run.latAccelBonus();
+            seekerRangeEff = spec.dogfightRange;      // 半径不跳档：他那句给的是夹角，不是半径
+            // 翻倍只乘自带那一段，不乘过载卡的加成（理由见 Balance.Missile.dogfightLatAccelTier2Mul）。
+            float own = run.dogfightTier2() ? spec.dogfightLatAccel * spec.dogfightLatAccelTier2Mul
+                    : spec.dogfightLatAccel;
+            maxLatAccelEff = own + run.latAccelBonus();
             navEff = spec.dogfightNavConstant;
             boostEff = spec.dogfightBoostSec;
             reIgnite = false;          // 「没有二次点火卡就没有再次点火」对它更是天然成立

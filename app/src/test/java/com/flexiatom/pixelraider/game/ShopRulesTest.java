@@ -338,9 +338,15 @@ public class ShopRulesTest {
      * <p>这条同时钉住"满级 = 1"这个哨兵没被写成 {@code UNLIMITED}——真写成不限级，玩家能花七十金
      * 买第二遍同一个机制，那是纯损失，而卡面上没有任何东西会告诉他这件事。
      *
-     * <p>格斗弹、连续杆、雷达锁定走的是**同一条形状**（买断一个机制 ⇒ 买过就下架），所以四张并列在这儿：
-     * 断的是"开闸 13 张 − 四张买断 = 9"。漏登记任何一张的满级档数（{@code maxLevelOf} 的 default
-     * 是 UNLIMITED），它就下架不了、这个数立刻变成 10。
+     * <p>连续杆、雷达锁定走的是**同一条形状**（买断一个机制 ⇒ 买过就下架），所以三张并列在这儿：
+     * 断的是"开闸 13 张 − 三张买断 = 10"。漏登记任何一张的满级档数（{@code maxLevelOf} 的 default
+     * 是 UNLIMITED），它就下架不了、这个数立刻变成 11。
+     *
+     * <p>格斗弹**原来也是这一族**，2026-10-06 起不是了——他裁「我的建议是加个二级卡，加大发射扇形
+     * 总夹角到100°并给转弯率翻倍」，于是它变成**两档**：一级买机制、二级买量。这一族里把它单独拎出来
+     * 断反向的那一半（买过一级**还在架**、买到二级才下架），理由是这条恰好是满级哨兵的失效形状：
+     * 档数一旦从 2 写回 1，它就在 Lv1 下架，"还能再买"这件事在货架上静默消失，而卡面价格那行仍然显示
+     * 得完全合理。⚠ 它同时也是那一格角标的判据（{@link #levelBadgesAreJudgedIndependentlyOfTheCapSentinel}）。
      *
      * <p>后面那一份快照把同一个形状断在**两张解锁卡自己**身上，顺带钉住开闸后的构成：6 张常驻构筑
      * ＋ 6 张导弹流卡 = 12。少了「雷达锁定」那格会变 11，而 11 看起来完全像个合理的数——这正是
@@ -358,14 +364,22 @@ public class ShopRulesTest {
         assertTrue("没买的时候它必须在货架上", has(shelf(s), Balance.ShopCard.ROD));
         assertTrue("没买的时候它必须在货架上", has(shelf(s), Balance.ShopCard.RADAR));
         s.level[Balance.ShopCard.MID_COURSE] = 1;
-        s.level[Balance.ShopCard.DOGFIGHT] = 1;
         s.level[Balance.ShopCard.ROD] = 1;
         s.level[Balance.ShopCard.RADAR] = 1;
         assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.MID_COURSE));
-        assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.DOGFIGHT));
         assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.ROD));
         assertFalse("买过一级之后还挂着", has(shelf(s), Balance.ShopCard.RADAR));
-        assertEquals("其余九张不受影响（开闸 13 张 − 四张买断）", 9, shelf(s).length);
+        assertEquals("其余十张不受影响（开闸 13 张 − 三张买断；格斗弹两档，此时还在架）",
+                10, shelf(s).length);
+
+        // 格斗弹是这一族里唯一**不**在一级下架的那张：它卖两档，一级给机制、二级给量。
+        s.level[Balance.ShopCard.DOGFIGHT] = 1;
+        assertTrue("买了二级的那一格被自己摘掉了 ⇒ 这局再也买不到 100°/翻倍",
+                has(shelf(s), Balance.ShopCard.DOGFIGHT));
+        assertEquals("它在架时那十张没别的变化", 10, shelf(s).length);
+        s.level[Balance.ShopCard.DOGFIGHT] = 2;
+        assertFalse("买到顶之后还挂着", has(shelf(s), Balance.ShopCard.DOGFIGHT));
+        assertEquals("四张到顶（三买断 ＋ 格斗弹两档），13 − 4", 9, shelf(s).length);
 
         // 两张武器解锁卡**自己也是这个形状**：买一级即永久生效，之后不许再摆着让人买第二遍
         // （"激光能买两级"不是一种可解释的商品，所以两张共用 weaponUnlockMaxLevel = 1）。
@@ -883,7 +897,15 @@ public class ShopRulesTest {
 
         run.buyUpgrade(Balance.ShopCard.DOGFIGHT);
         assertTrue("买了格斗弹却没开火控", run.dogfightOn());
-        assertFalse("买断卡第二级不该被接受", run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
+        assertEquals("刚买到的那一档是一级", 1, run.dogfightLevel());
+        assertFalse("一级就跳进二级 ⇒ 二级白送了", run.dogfightTier2());
+        // 2026-10-06 他逐字「我的建议是加个二级卡，加大发射扇形总夹角到100°并给转弯率翻倍」
+        // ⇒ 这张卡不再是买断形状。旧那句"买断卡第二级不该被接受"在这里作废。
+        assertTrue("第二档被拒 ⇒ 他说的那张二级没落地", run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
+        assertTrue("买二级把火控关了 ⇒ 二级只能加档，不该改这条流在不在", run.dogfightOn());
+        assertEquals(2, run.dogfightLevel());
+        assertTrue("两档到顶还读不出一级之外的档 ⇒ 二级没接线", run.dogfightTier2());
+        assertFalse("第三级不该被接受（档数是 2，不是无限）", run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
         assertEquals("格斗弹不许改导引半径（那是二次点火卡卖的）", 75f, run.seekerRangeBonus(), 0f);
         assertEquals("格斗弹不许改过载增量（那是机动过载卡卖的）", 1480f, run.latAccelBonus(), 0f);
         assertEquals("格斗弹不许改视场夹角（那也是机动过载卡卖的）", 24f, run.seekerArcDegBonus(), 0f);
@@ -928,9 +950,11 @@ public class ShopRulesTest {
         assertEquals(1, ShopRules.maxLevelOf(Balance.ShopCard.MID_COURSE));
         assertEquals(3, ShopRules.maxLevelOf(Balance.ShopCard.IGNITION));
         assertEquals(4, ShopRules.maxLevelOf(Balance.ShopCard.HANDLING));
-        // 第四张也是买断：它没有"每级"这个东西（自带那一组参数在 Balance.Missile 里，不涨）。
-        assertEquals(1, ShopRules.maxLevelOf(Balance.ShopCard.DOGFIGHT));
-        assertEquals("买断档数必须取自 Balance.shop 那一格，不许在两个文件各写一个 1",
+        // 第四张**不再是买断**：2026-10-06 他逐字「我的建议是加个二级卡，加大发射扇形总夹角到100°
+        // 并给转弯率翻倍」⇒ 两档（一级开那条流、二级给扇形与过载）。它仍然没有"每级"这个东西
+        // （两档的字面值各自住在 Balance.Missile，不是一个乘子），但"档数 1"这句已经过期。
+        assertEquals(2, ShopRules.maxLevelOf(Balance.ShopCard.DOGFIGHT));
+        assertEquals("档数必须取自 Balance.shop 那一格，不许在两个文件各写一个数",
                 Balance.shop.dogfightMaxLevel, ShopRules.maxLevelOf(Balance.ShopCard.DOGFIGHT));
         // 两张武器解锁卡读**同一个** weaponUnlockMaxLevel（Balance 那条写了理由：它们之间没有
         // 需要独立调档的东西）。所以这里断的不是"各自等于 1"，而是"两张指向同一格"——
@@ -970,11 +994,13 @@ public class ShopRulesTest {
         }
         // 簇 II 补上**第三种组合**：有上限（1 级）、却不画角标。判据若从 {@code maxLevelOf} 推，
         // 这两张会跟着"有上限就画"错出「Lv 1」——买断卡的第二级根本不存在，那一格永远读不到变化。
-        // 第四张（格斗导弹）与中段引导**同一种**：它也是买断一个机制，画「Lv 1」是同一句空话。
         assertEquals(1, ShopRules.maxLevelOf(Balance.ShopCard.MID_COURSE));
         assertFalse("买断卡没有累计收益，Lv 1 那一格是空话",
                 ShopRules.showsLevel(Balance.ShopCard.MID_COURSE));
-        assertFalse("买断卡没有累计收益，Lv 1 那一格是空话",
+        // 格斗导弹**离开了这一族**（2026-10-06 他裁的二级）：它是"有上限 2 且**画**角标"那一格，
+        // 与上面那条一起把判据钉成"看收益、不看哨兵"——只留买断那两张的话，把 DOGFIGHT 也判成
+        // false 一样能过，而那是把他那句「加个二级卡」从卡面上擦掉。
+        assertTrue("格斗弹有两档，卡角不画「Lv 1」 ⇒ 玩家看不出自己压到第几档",
                 ShopRules.showsLevel(Balance.ShopCard.DOGFIGHT));
         // 两张武器解锁卡与上面**同一种**：买一级就有这一把，第二级不存在，「Lv 1」永远读不到变化。
         assertFalse("解锁卡画「Lv 1」是空话：" + Balance.shopCards[Balance.ShopCard.BASIC_MISSILE].name,

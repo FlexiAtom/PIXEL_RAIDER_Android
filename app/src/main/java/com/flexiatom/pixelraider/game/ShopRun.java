@@ -183,15 +183,35 @@ public final class ShopRun {
     }
 
     /**
-     * 格斗导弹（簇 II 第四件）：同样是**买断**卡，所以这里只有"有没有"、没有"几级"。
+     * 「格斗导弹」买到第几档（0＝没买）。
      *
-     * <p>⚠ 这个开关只回答"要不要开那条发射判据"，**不改任何导引参数**：格斗弹那六个
-     * {@code dogfight*} 字段全在 {@code Balance.Missile} 里，一张卡买断之后没有等级可叠，
-     * 于是"卡面数字"与"结算读数"两件事在它身上都不存在（{@code ShopRules.perLevelOf}
-     * 对它返回 0 是同一条）。
+     * <p>它**不是**只有"有没有"的那一类：他 2026-10-06 逐字「我的建议是加个二级卡，加大发射扇形总夹角
+     * 到100°并给转弯率翻倍」⇒ 一级卖机制（这条流在不在），二级才卖量。两档的字面值都在
+     * {@code Balance.Missile} 的 {@code dogfight*} 字段里，这里只出等级，**不在这里做算术**
+     * （局内成长口径：读等级挑档，不烙配置表）。
+     */
+    public int dogfightLevel() {
+        return levelOf(Balance.ShopCard.DOGFIGHT);
+    }
+
+    /**
+     * 二级是否生效。发射扇形与自带过载**一起**跳这一档，所以"二级"是一档、不是两条各自可叠的量
+     * （把他那句话拆成两个开关，就会长出"只买到一半的二级"这种他没说过的商品）。
+     */
+    public boolean dogfightTier2() {
+        return dogfightLevel() >= 2;
+    }
+
+    /**
+     * 格斗导弹（簇 II 第四件）：**这条流开没开火控**。二级只是让已开的这条流更强，不开新流，
+     * 所以判据仍是"有没有"（{@code level ≥ 1}），与 {@link #dogfightLevel()} 各答各的问题。
+     *
+     * <p>⚠ 这个开关只回答"要不要开那条发射判据"，**不改任何导引参数**：那些数全在
+     * {@code Balance.Missile} 的 {@code dogfight*} 字段里，由 {@code MissileBehavior.beginFrame}
+     * 按档挑（{@link #dogfightTier2()}）。
      */
     public boolean dogfightOn() {
-        return levelOf(Balance.ShopCard.DOGFIGHT) > 0;
+        return dogfightLevel() > 0;
     }
 
     /**

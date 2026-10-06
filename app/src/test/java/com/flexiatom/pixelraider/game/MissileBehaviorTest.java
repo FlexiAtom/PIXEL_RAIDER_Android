@@ -1243,6 +1243,39 @@ public final class MissileBehaviorTest {
     }
 
     /**
+     * 二档跳的是**发射扇形的夹角**，不跳半径。口径出处是他 2026-10-06 的逐字（本地时间）：
+     * 「我的建议是加个二级卡，加大发射扇形<b>总夹角到100°</b>并给转弯率翻倍」——夹角 100° 是他的数，
+     * <b>"总夹角 ⇒ 半角 50°"这个折半、以及"半径不跟着涨"这两条是我的</b>（他那句给的是夹角，
+     * 而半径 50 那格他另有 L36897 一句"若机头前半径50、圆心角60度的扇形内…"钉着）。
+     *
+     * <p>三只各挡一种错法：45° 那只一级够不着、二档够得着＝放宽真的接进了发射判据（写死在
+     * {@code beginFrame} 的 {@code launchCos2} 上，而不是只写进 {@link Balance.Missile#dogfightHalfDegTier2}
+     * 那个字段——后者没有这条断言的话，改了也没人响）；半径外那只到二档仍然够不着＝夹角与半径是
+     * 两条独立判据，别把"放宽"实现成"整个圈放大"；而挑中的必须是 45° 那只＝放宽扇形没顺手把
+     * "取最近"改成"取视角更正的那只"。
+     */
+    @Test
+    public void theSecondTierWidensTheLaunchAngleWithoutGrowingTheRange() {
+        assertTrue("45° 不落在两档半角之间 ⇒ 这条用例摆错了位，两头都在同一个锥里它只会空转",
+                spec.dogfightHalfDeg < 45f && 45f < spec.dogfightHalfDegTier2);
+        Enemies.Enemy wide = bearingUp(START_X, START_Y, 45f, 20f);
+        bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);      // 正对机头，但在半径外
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
+        assertEquals("一级的锥里没人 ⇒ 该一枚不出（45° 在 30° 半角之外）",
+                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        assertTrue(run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
+        assertTrue("第二档被拒 ⇒ 下面断的是个买不到的形状",
+                run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
+        assertEquals("放宽没接到发射判据上 ⇒ 45° 那只到二档还是够不着",
+                slotOf(wide), dog.tryLaunch(START_X, START_Y, foes, spec));
+        wide.hp = 0;                                        // 只剩半径外那一只活着
+        dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
+        assertEquals("二档把半径也一起放大了 ⇒ 「加大发射扇形」那句里没有一个字是距离",
+                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+    }
+
+    /**
      * 「一只敌机可以同时挂一锁＋二锁＋格斗锁是工程设计，弹体池建议分家」（L37356，plain，
      * UTC 2026-09-28T23:52:47.500Z＝本地 09-29 07:52:47）⇒ 占用戳**只读本池**。
      *
@@ -1445,6 +1478,73 @@ public final class MissileBehaviorTest {
                         + Math.toDegrees((spec.maxLatAccel + run.latAccelBonus()) / spec.stallSpeed * STEP)
                         + "°/步，完全不吃卡则是 " + Math.toDegrees(dogCap) + "°/步）",
                 carded, steerForTurns(reArm(chase), chase, carded, 20f), 1e-4f);
+    }
+
+    /**
+     * 二档给的那一倍**只乘自带的一段**，不乘「机动过载」卡的加成：
+     * {@code 1040×2 + 370×N}，不是 {@code (1040 + 370×N)×2}。两种写法在过载卡满级时差
+     * 1480 px/s²（3560 对 5040 ⇒ 首步 15.45°/步 对 21.88°/步，画面上是两种弹道），
+     * 所以这一格必须有个读数钉着，不能靠"反正差不多"。判据出处同
+     * {@link #theSecondTierWidensTheLaunchAngleWithoutGrowingTheRange}：他那句「给转弯率<b>翻倍</b>」
+     * 里被翻倍的主语是**这条流自带的转弯率**，而卡那份增量是另一张卡卖的（L36568 起两个版本都写着
+     * 「并且能叠加最大过载卡」——叠在谁身上由这句决定，不由实现顺手决定）。
+     *
+     * <p>读数取**出膛第一步**：PN 的指令在此处远超那道闸（实测把摆位的横速加到 900px/s 也只是
+     * 同一个数），所以这一步转的角度就是闸门本身；分母取 {@code max(|v|, stallSpeed)} 而第一步
+     * {@code |v| = 220 > 120} ⇒ 换算用 220，不是 {@link #itsOverloadGateStartsFromItsOwnNumberAndStillTakesTheCard}
+     * 那套滑到地板之后的 120。两条是同一个闸的两种读法，各钉各的摆位。
+     */
+    @Test
+    public void theSecondTierDoublesItsOwnOverloadButNotTheCards() {
+        float own = spec.dogfightLatAccel;
+        float at = MUZZLE_SPEED;                                  // 第一步的分母
+        assertEquals("出厂那道闸的读数变了 ⇒ 下面这组等式的基准不成立了",
+                own / at * STEP, Math.toRadians(turnOnFirstStep()), 1e-3f);
+        assertTrue("机动过载卡满级本身被拒 ⇒ 后面那句'卡那份没被翻倍'没有可比性",
+                buyAll(Balance.ShopCard.HANDLING, Balance.shop.handlingMaxLevel));
+        float bonus = run.latAccelBonus();
+        assertEquals("满级增量不是 4×370 ⇒ 两种写法的差（它的两倍）也跟着变，等式得重算",
+                1480f, bonus, 0f);
+        assertEquals("卡的加成没叠在自带那段上",
+                (own + bonus) / at * STEP, Math.toRadians(turnOnFirstStep()), 1e-3f);
+        float mul = spec.dogfightLatAccelTier2Mul;
+        assertTrue(run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
+        assertEquals("一档就动闸 ⇒ 翻倍跑到没卖的那一档去了",
+                (own + bonus) / at * STEP, Math.toRadians(turnOnFirstStep()), 1e-3f);
+        assertTrue(run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
+        float additive = (own * mul + bonus) / at * STEP;
+        float multiplicative = (own + bonus) * mul / at * STEP;
+        assertTrue("两种写法算出同一个数 ⇒ 这条用例区分不了任何东西",
+                Math.abs(additive - multiplicative) > 1e-3f);
+        assertEquals("二档把卡的加成也一起翻了一倍（那是 " + Math.toDegrees(multiplicative)
+                        + "°/步，这条钉的是 " + Math.toDegrees(additive) + "°/步）⇒ 「翻倍」的主语越界了",
+                additive, Math.toRadians(turnOnFirstStep()), 1e-3f);
+    }
+
+    /** 真实"判据→出膛→装配"之后**第一步**转了多少度（摆位同 {@link #steerForTurns}：偏轴 25°、20px、横速 150）。 */
+    private float turnOnFirstStep() {
+        dogPool.clear();
+        Enemies.Enemy chase = bearingUp(START_X, START_Y, 0f, 40f);
+        Missiles.Missile m = armedDog();
+        keepBearing(m, chase, 25f, 20f);
+        float len = speed(m);
+        chase.vx = -m.vy / len * 150f;
+        chase.vy = m.vx / len * 150f;
+        float before = (float) Math.atan2(m.vy, m.vx);
+        int flags = dogStep(m);
+        assertEquals("第一步就退场了（flags=" + flags + "）⇒ 摆位撑不住这条用例",
+                MissileBehavior.FLAG_NONE, flags);
+        chase.hp = 0;                                 // 下一档换目标，别让它继续占着这只
+        return (float) Math.toDegrees(Math.abs(angleDelta(m.vx, m.vy,
+                (float) Math.cos(before), (float) Math.sin(before))));
+    }
+
+    /** 一张卡买到顶：任何一级被拒都直接炸，因为下面的等式全建立在"确实涨满了"这个前提上。 */
+    private boolean buyAll(int cardId, int levels) {
+        for (int n = 0; n < levels; n++) {
+            if (!run.buyUpgrade(cardId)) return false;
+        }
+        return true;
     }
 
     /** 清场重摆：把目标放回扇形正中，再走一遍真实的"判据→出膛→装配"。 */

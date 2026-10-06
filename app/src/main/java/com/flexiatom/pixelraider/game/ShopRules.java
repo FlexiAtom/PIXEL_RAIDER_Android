@@ -165,7 +165,10 @@ public final class ShopRules {
             case Balance.ShopCard.MID_COURSE: return 0f;   // 买断机制，没有数
             case Balance.ShopCard.IGNITION: return k.seekerRangePerLevel;
             case Balance.ShopCard.HANDLING: return k.seekerArcDegPerLevel;
-            case Balance.ShopCard.DOGFIGHT: return 0f;     // 同中段引导：买断一条流，没有数
+            // 格斗导弹有两档（2026-10-06），但"每级的量"这件事在它身上**不成立**：一级给的是流本身、
+            // 二级一次给两样（夹角 60°→100° 加过载翻倍），没有一个"×等级"的线性读数可印。
+            // 印 0 而不是硬挑一个数，是为了不让卡面拿半条改动冒充整张卡（那两档的字面值在 Balance.Missile）。
+            case Balance.ShopCard.DOGFIGHT: return 0f;
             // 两张武器解锁卡（2026-10-02）与中段引导同形：卖的是"这一把在不在飞机上"，没有量。
             case Balance.ShopCard.BASIC_MISSILE: return 0f;
             case Balance.ShopCard.BASIC_LASER: return 0f;
@@ -197,7 +200,8 @@ public final class ShopRules {
             case Balance.ShopCard.HULL: return k.hullMaxLevel;
             case Balance.ShopCard.MAGNET: return k.magnetMaxLevel;
             case Balance.ShopCard.GREED: return k.coinMaxLevel;
-            // 簇 II 四张都有上限：中段引导与格斗导弹是**买断**（1 级），另两张是"级数换半径/角度"。
+            // 簇 II 四张都有上限：中段引导是**买断**（1 级），格斗导弹是**两档**（机制 + 二级那条量），
+            // 另两张是"级数换半径/角度"。
             // 满级后由 isValid 顶部那道 maxLevelOf 检查自动下架，不靠货架端特判。
             case Balance.ShopCard.MID_COURSE: return k.midCourseMaxLevel;
             case Balance.ShopCard.IGNITION: return k.seekerRangeMaxLevel;
@@ -232,7 +236,8 @@ public final class ShopRules {
             case Balance.ShopCard.SURGE:
             case Balance.ShopCard.RANDOM:
             case Balance.ShopCard.MID_COURSE:
-            case Balance.ShopCard.DOGFIGHT:
+            // 格斗导弹**不在这一格里了**（2026-10-06 他裁的二级）：它从一级买断变成两档，第二档给
+            // 扇形与过载，于是"收益随累计等级变多"这条判据第一次落在它身上 ⇒ 卡角要画「Lv 1」。
             // 两张武器解锁卡同族：买断一个机制（这一把在不在飞机上），没有累计等级可画。
             case Balance.ShopCard.BASIC_MISSILE:
             case Balance.ShopCard.BASIC_LASER:
@@ -241,7 +246,7 @@ public final class ShopRules {
             case Balance.ShopCard.ROD:
             // 雷达锁定同族：买断的是"那块屏在不在"，只有买过/没买过两态。
             case Balance.ShopCard.RADAR:
-                // 中段引导与格斗导弹都是买断：只有"买过/没买过"两态，而买过之后这张卡就下架了，
+                // 买断一条机制的卡只有"买过/没买过"两态，而买过之后这张卡就下架了，
                 // 所以「Lv 0」是它唯一会上屏的一行废话——判据仍是那条"收益随不随累计等级变多"。
                 return false;
             default:
