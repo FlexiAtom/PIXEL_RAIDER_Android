@@ -1675,8 +1675,7 @@ public final class Game implements GameThread.Host {
      * {@code advance} 会当场抛（"生来带锁"是设定，不是概率，见那里的注释）。
      */
     private void fireDogfight() {
-        Balance.Missile spec = Balance.missile;
-        int slot = dogfightBehavior.tryLaunch(player.x, noseY(), enemies, spec);
+        int slot = dogfightBehavior.tryLaunch(player.x, noseY(), enemies);
         if (slot < 0) return;                       // 扇形里没有可锁的 ⇒ 不发（不是"随便发一枚"）
         Balance.Weapon w = player.weapon();
         // 伤害档沿用**当前那把制导枪**：他的原话只说"自带高过载和舵效"，说的是导引参数，

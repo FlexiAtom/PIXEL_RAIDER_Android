@@ -1212,19 +1212,19 @@ public final class MissileBehaviorTest {
     @Test
     public void theLaunchGateHandsBackTheNearestEnemyInsideItsSector() {
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
-        assertEquals("场上没人 ⇒ 一枚都不许出", -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        assertEquals("场上没人 ⇒ 一枚都不许出", -1, dog.tryLaunch(START_X, START_Y, foes));
         bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);          // 轴上，但在半径外
         assertEquals("半径也算进锁定 ⇒ 这张卡变成了射程无限的第二把主炮",
-                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+                -1, dog.tryLaunch(START_X, START_Y, foes));
         bearingUp(START_X, START_Y, spec.dogfightHalfDeg + 10f, 20f);      // 半径内、锥外，而且全场最近
         assertEquals("先取近者再看角度 ⇒ 它会朝屏幕侧面出弹",
-                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+                -1, dog.tryLaunch(START_X, START_Y, foes));
         bearingUp(START_X, START_Y, 0f, 30f).hp = 0;                       // 锥内、半径内、更近，但血已归零
-        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes));
         Enemies.Enemy near = bearingUp(START_X, START_Y, 20f, 44f);
         bearingUp(START_X, START_Y, 0f, 49f);                              // 更贴轴线，但更远
         assertEquals("挑的不是扇形里最近那一只 ⇒ 跨过眼前去打后面那只",
-                slotOf(near), dog.tryLaunch(START_X, START_Y, foes, spec));
+                slotOf(near), dog.tryLaunch(START_X, START_Y, foes));
     }
 
     /**
@@ -1273,11 +1273,11 @@ public final class MissileBehaviorTest {
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         far.hp = 0;
         assertEquals("一级的锥是 30° 半角 ⇒ 45° 那只该不出",
-                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+                -1, dog.tryLaunch(START_X, START_Y, foes));
         wide.hp = 0;
         far.hp = 20;
         assertEquals("一级停在 50 ⇒ 轴上 60px 那只该不出",
-                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+                -1, dog.tryLaunch(START_X, START_Y, foes));
         assertTrue(run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
         assertTrue("第二档被拒 ⇒ 下面断的是个买不到的形状",
                 run.buyUpgrade(Balance.ShopCard.DOGFIGHT));
@@ -1285,21 +1285,21 @@ public final class MissileBehaviorTest {
         far.hp = 0;
         wide.hp = 20;
         assertEquals("放宽没接到发射判据上 ⇒ 45° 那只到二档还是够不着",
-                slotOf(wide), dog.tryLaunch(START_X, START_Y, foes, spec));
+                slotOf(wide), dog.tryLaunch(START_X, START_Y, foes));
         wide.hp = 0;
         far.hp = 20;
         assertEquals("半径没接到发射判据上 ⇒ 二档那 70px 只活在 Balance 的字段里",
-                slotOf(far), dog.tryLaunch(START_X, START_Y, foes, spec));
+                slotOf(far), dog.tryLaunch(START_X, START_Y, foes));
         far.hp = 0;
         Enemies.Enemy out = bearingUp(START_X, START_Y, 0f, spec.dogfightRangeTier2 + 5f);
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         assertEquals("半径涨到 70 却把边丢了 ⇒ 出弹判据退化成「偏角对得上就发」",
-                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+                -1, dog.tryLaunch(START_X, START_Y, foes));
         out.hp = 0;
         bearingUp(START_X, START_Y, 75f, 20f);
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         assertEquals("总夹角 125° 被读成全向 ⇒ 正侧方也发弹，那是把近战补位做成第二把主炮",
-                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+                -1, dog.tryLaunch(START_X, START_Y, foes));
     }
 
     /**
@@ -1342,14 +1342,14 @@ public final class MissileBehaviorTest {
         frame(std);
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
         assertEquals("跨池排他了 ⇒ 已挂普通锁的目标没人补位，而近身问题正是格斗弹来解的",
-                slotOf(prey), dog.tryLaunch(START_X, START_Y, foes, spec));
+                slotOf(prey), dog.tryLaunch(START_X, START_Y, foes));
         Missiles.Missile m = dogPool.spawn();
         settle(m, START_X, START_Y, 0f, -MUZZLE_SPEED);
         dog.armDogfight(m, foes, slotOf(prey));
         assertEquals("同一帧刚锁上就再派一枚 ⇒ 一敌一锁没接住",
-                -1, dog.tryLaunch(START_X, START_Y, foes, spec));
+                -1, dog.tryLaunch(START_X, START_Y, foes));
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
-        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes));
     }
 
     /**
@@ -1396,7 +1396,7 @@ public final class MissileBehaviorTest {
     public void theLaunchAndArmEntryPointsGuardTheirOwnLane() {
         Missiles.Missile m = muzzle(START_X, START_Y, 0f, -MUZZLE_SPEED);
         try {
-            beh.tryLaunch(START_X, START_Y, foes, spec);
+            beh.tryLaunch(START_X, START_Y, foes);
             throw new AssertionError("标准流上没有发射判据这条扇形，串过来必须炸");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("dogfight stream"));
@@ -1409,7 +1409,7 @@ public final class MissileBehaviorTest {
         }
         MissileBehavior fresh = new MissileBehavior(ENEMY_CAP, MissileBehavior.STREAM_DOGFIGHT);
         try {
-            fresh.tryLaunch(START_X, START_Y, foes, spec);
+            fresh.tryLaunch(START_X, START_Y, foes);
             throw new AssertionError("本帧没 beginFrame：占用戳还是上一帧的，同帧刚锁走的那只会再吃一枚");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("beginFrame"));
@@ -1689,7 +1689,7 @@ public final class MissileBehaviorTest {
         bearingUp(START_X, START_Y, 0f, spec.dogfightRange + 5f);
         bearingUp(START_X, START_Y, spec.dogfightHalfDeg + 10f, 20f);
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
-        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes, spec));
+        assertEquals(-1, dog.tryLaunch(START_X, START_Y, foes));
     }
 
     // ---- 助手 -------------------------------------------------------------------------------
@@ -1767,7 +1767,7 @@ public final class MissileBehaviorTest {
      */
     private Missiles.Missile armedDog() {
         dog.beginFrame(dogPool, foes, spec, run, MissileBehavior.NO_DESIGNATED);
-        int slot = dog.tryLaunch(START_X, START_Y, foes, spec);
+        int slot = dog.tryLaunch(START_X, START_Y, foes);
         assertTrue("扇形里没有可锁目标 ⇒ 这条用例摆错了位", slot >= 0);
         WeaponFire.Template t = new WeaponFire.Template();
         WeaponFire.fillTemplate(t, Balance.weapons[Balance.Weapon.MISSILE], 1f, 1f, 0, 0f, 0);

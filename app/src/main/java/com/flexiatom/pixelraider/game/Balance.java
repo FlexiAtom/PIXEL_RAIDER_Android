@@ -376,7 +376,10 @@ public final class Balance {
          * {@link #seekerRange} 涨满是 125，两者今天还差 55px，那就是他要留的那道缝。
          *
          * <p>口径顺带对齐：70 ＝ <b>7×机长</b>（同 {@link #dogfightRange} 那条"受击直径 = 2×radius"的
-         * 读法，10 × 7 = 70）⇒ 二级只是把那条 5 倍的口径改成 7 倍，没有换单位。
+         * 读法，10 × 7 = 70）⇒ 二级只是把那条 5 倍的口径改成 7 倍，没有换单位。⚠ 这句是**单位对账**、
+         * 不是约束：任何 10 的倍数都落得进这把尺，所以钉它没有意义；一级那格才有等式测试
+         * （{@code MissileBehaviorTest.itsLaunchRangeIsStillFiveHullLengths}），二级那格钉的是**上界**
+         * （{@code itsSecondTierRimStaysShorterThanTheStandardSeekers}，来自他那句"不建议再高"）。
          * ⚠ 与 {@link #dogfightHalfDegTier2} 同档一起跳（**两样是同一笔钱**，卡面"更大"两个字说的就是它们）。
          */
         public float dogfightRangeTier2 = 70f;

@@ -304,8 +304,9 @@ public final class MissileBehavior {
      *
      * <p>扇形的形状**按档解析**（{@link #launchCos2}、{@link #launchRange}，都在 {@link #beginFrame}
      * 里定），一级是他 L36897 那句逐字的「半径50、圆心角60度的扇形」，二级是他 2026-10-06 的
-     * 「总夹角 125°」＋「50锁定距离拉到70」⇒ 本方法的判据里**没有** {@code spec.dogfightXxx} 的直接读取，
-     * 只有那一份解析结果：往 {@code spec} 上再加一个数就会造出"出得了弹但追不上"的第二条真相。
+     * 「总夹角 125°」＋「50锁定距离拉到70」⇒ 所以**本方法不收 {@code Balance.Missile} 参数**：
+     * 判据只能来自 {@code beginFrame} 那一份解析值。递一张表进来，就等于允许调用方递一份"还没跳过档的旧表"，
+     * 那会造出"出得了弹却追不上"的第二条真相——扇形有两条边，只有它们同源这件事才是可判定的。
      *
      * <p>三条判据各自挡住一种失效：
      * <ul>
@@ -330,7 +331,7 @@ public final class MissileBehavior {
      * @param x,y 机头位置（发射点）——扇形圆心，与 {@code Game} 出膛点同一个数
      * @return 可发射目标的槽号；扇形内没有可锁目标 ⇒ -1，调用方据此**不发**（不是"随便发一枚"）
      */
-    public int tryLaunch(float x, float y, Enemies foes, Balance.Missile spec) {
+    public int tryLaunch(float x, float y, Enemies foes) {
         if (stream != STREAM_DOGFIGHT) {
             // 消息写英文：EmbeddedFontTest 只要求**上屏**的字面量有字模。
             throw new IllegalStateException("tryLaunch is the dogfight stream's launch gate, but this "
@@ -351,7 +352,7 @@ public final class MissileBehavior {
             float dy = e.y - y;
             float d2 = dx * dx + dy * dy;
             if (d2 > maxD2) continue;
-            // 锥轴是**常量屏幕正上方**：与射前雷达同一条口径，机头不随机体转（见 dogfightHalfDeg）。
+            // 锥轴是**常量屏幕正上方**：与射前雷达同一条口径，机头不随机体转（半角按档见 launchCos2）。
             if (!inCone(0f, -1f, launchCos2, dx, dy, d2)) continue;
             if (d2 < bestD2) {
                 bestD2 = d2;
