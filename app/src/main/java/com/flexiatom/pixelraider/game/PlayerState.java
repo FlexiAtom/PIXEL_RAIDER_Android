@@ -45,6 +45,25 @@ public final class PlayerState {
     public float radius = Balance.player.radius;
     public float invuln;
     public int weaponId = Balance.Weapon.PULSE;
+    /**
+     * 每个体系里**上一次手持的那把**，体系键（{@code ShopRun.nextSchoolWeapon}）回来时的落点；
+     * -1 = 这一局还没在该体系落过。理由与"为什么不是永远落在第一把"都写在 {@code ShopRun} 那条上。
+     *
+     * <p>⚠ 它是**局内**状态：{@code Game.resetRun} 必须调 {@link #resetSchoolMemory()} 把它随这一局的
+     * 持有量一起清零。不清的后果是可达的——上一局买断过激光、这一局没买，体系键会把那个 id 当成落点
+     * 递出去，于是"没买却有"（手里凭空一把激光）。那条 bug 的形状与 {@code resetRun} 里钳 weaponId
+     * 的注释逐字对称。
+     */
+    public final int[] lastGunOfSchool = new int[Balance.Weapon.SCHOOL_COUNT];
+
+    public PlayerState() {
+        resetSchoolMemory();   // 数组的"零值"是 0 = 脉冲，而 0 在这里的意思是"没持过" ⇒ 实例化就得填 -1
+    }
+
+    /** 体系记忆清零。每一局开局调一次，所以落点判据只看这一局。 */
+    public void resetSchoolMemory() {
+        for (int i = 0; i < lastGunOfSchool.length; i++) lastGunOfSchool[i] = -1;
+    }
     public float fireTimer;
     public boolean alive = true;
     /** {@link DamageRules#applyToPlayer} 的输出缓冲，提为字段以免每次受伤 new（规格 §三）。 */

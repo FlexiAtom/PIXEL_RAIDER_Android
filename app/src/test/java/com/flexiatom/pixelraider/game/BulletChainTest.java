@@ -55,7 +55,8 @@ public class BulletChainTest {
     private static final float NOSE_X = 120f, NOSE_Y = 300f;
 
     private static Balance.Weapon weapon(int id, float speed, float len, float period) {
-        Balance.Weapon w = new Balance.Weapon(id, "T" + id, 0);
+        // 体系填子弹：这条合成武器只喂弹链的几何算术，不参与切枪那两级循环（体系今天与分流无关）。
+        Balance.Weapon w = new Balance.Weapon(id, "T" + id, 0, Balance.Weapon.SCHOOL_BULLET);
         w.bulletSpeed = speed;
         w.size = len;
         w.drawLenRatioY = 1f;      // 绘制弹长 == size ⇒ 间隔 = len/speed

@@ -241,6 +241,9 @@ public final class Game implements GameThread.Host {
     /** 切枪键：与炸弹键同一套换算（绘制框 HUD 相对、命中框加 hudTop），也摆在同一条底线。 */
     private final RectI switchDraw = new RectI();
     private final RectI switchHit = new RectI();
+    /** 体系键：换算与摆放同前两颗，在三兄弟的最左手边（几何与判序见 {@code HudLayout.schoolRect}）。 */
+    private final RectI schoolDraw = new RectI();
+    private final RectI schoolHit = new RectI();
     /** 雷达屏：换算同前三枚键。它**不是按钮**，命中框只用来判"这一跳落在屏内还是屏外"。 */
     private final RectI radarDraw = new RectI();
     private final RectI radarHit = new RectI();
@@ -477,6 +480,9 @@ public final class Game implements GameThread.Host {
         HudLayout.switchRect(m.battleHeight(), switchDraw);
         Widgets.hitRect(switchDraw, hitBoxLogic, switchHit);
         switchHit.offsetInPlace(0, m.hudTop());
+        HudLayout.schoolRect(m.battleHeight(), schoolDraw);
+        Widgets.hitRect(schoolDraw, hitBoxLogic, schoolHit);
+        schoolHit.offsetInPlace(0, m.hudTop());
         // 雷达屏**不做 48dp 外扩**（与上面三枚键的唯一差别）：它的命中框要是比绘制框大，
         // "落在框内就不登记走位锚点"那条就会咬掉战场顶边外面一圈本来该用来走位的落点。
         // 绘制框本身是 {@code HudLayout.RADAR_SIDE} = 48 逻辑格，够点。
@@ -941,13 +947,17 @@ public final class Game implements GameThread.Host {
             openPause();
             return;
         }
-        // 切枪键排在炸弹**之前**判：两枚键的命中框都由 hitRect 按中心外扩到 48dp 下限，
-        // 低分辨率屏（外扩量 ≥ 42）上中间那 8 格净空会被咬掉，此时必须让误判落在换枪那一侧——
-        // 它只多一次震动，而反过来是把一件存了整波的炸弹点没了。判据与几何都在 HudLayout.switchRect。
-        // 另一处不对称是顺带说清的：这一枚不像炸弹那样配"没存货就不注册命中"的条件——这一圈上
-        // 永远还有下一把（四把默认枪不挂闸门，那条循环钉在 ShopRulesTest 的"每按一次必换"）。
-        if (switchHit.contains(x, y)) {
-            selectWeapon(shopRun.nextUnlockedWeapon(player.weaponId));
+        // 底部那一排今天是**三枚**：〔体系〕〔模式(切枪)〕〔炸弹〕。判序 = 误判代价的排序，见 HudLayout.schoolRect：
+        // 体系 ↔ 模式 走错了都只多按一次；而任何一枚走到炸弹那侧，代价是一件存了整波的手牌。所以炸弹**最后**判。
+        // 两枚换枪键各自配一道"按了有没有得换"的条件（与炸弹那条"没存货就不注册命中"同一条口径 ——
+        // 一颗点不动的按钮比没有按钮更糟）：体系键要**有第二个体系可去**，模式键要**本体系还有第二把**。
+        // 手持激光或导弹时模式键不出现（那两个体系各只有一把枪），买了任一解锁卡之前体系键不出现。
+        if (shopRun.schoolKeyLive(player.weaponId) && schoolHit.contains(x, y)) {
+            selectWeapon(shopRun.nextSchoolWeapon(player.weaponId, player.lastGunOfSchool));
+            return;
+        }
+        if (shopRun.modeKeyLive(player.weaponId) && switchHit.contains(x, y)) {
+            selectWeapon(shopRun.nextWeaponInSchool(player.weaponId));
             return;
         }
         // 没有存货就不注册命中：一颗点不动的按钮比没有按钮更糟（规格点名的"点了没反应"bug 类）
@@ -1176,21 +1186,31 @@ public final class Game implements GameThread.Host {
     /**
      * 换枪不清掉已经在飞的弹：玩家的主动投资不该被自己的一键取消。
      *
-     * <p>这一处同时是**持有量的闸门**：键盘 1..6 与底部切枪键都汇到这里，所以"没买过的枪按下去
+     * <p>这一处同时是**持有量的闸门**：键盘 1..6 与底部两枚换枪键都汇到这里，所以"没买过的枪按下去
      * 会不会响"只有一条答案。⚠ 它今天才开始拦键盘——原先六把枪全都能按，而其中两把从来没在
      * 商店里卖过（{@code ShopRun.weaponUnlocked}），于是键盘是唯一的获取途径、触屏压根没有。
      * 拦完之后键盘与触屏读的是同一个持有集合：调试要先看到导弹，就去商店买那一张「基础导弹」，
      * 而不是在这里给键盘留一条绕过闸门的近路（留了就有两个真源，而"哪把枪能按"正是这次出问题的地方）。
+     *
+     * <p>玩家侧的知情渠道今天有两条，且**都是真的**：① 没买的那两把**进不了循环**，所以底部那两枚键
+     * 在持有量不足时整块不出现（判据 {@code ShopRun.schoolKeyLive} / {@code modeKeyLive}，见
+     * {@code onPointerDown}）——键的出现本身就在报"你手里有几个体系、这个体系里有几把"；
+     * ② 按了一把买不到的（键盘那条路）响一声 {@code DENIED}。⚠ 原先这段写的是"面板把没持有的
+     * 那几格灰掉"，**那句没有对应实现**（{@code weaponUnlocked} 的读者只有这道闸门、{@code resetRun}
+     * 的钳位与测试，商店面板一个都不读）——2026-10-07 拆两级时按现状改口，别按下不表留给下一个人当真。
      */
     private void selectWeapon(int id) {
         if (id < 0 || id >= Balance.weapons.length || id == player.weaponId) return;
         if (!shopRun.weaponUnlocked(id)) {
-            // 按了一把没买过的枪：这一声是这个闸门的**可听出口**。面板把没持有的那几格灰掉，
-            // 但键盘 1..6 没有灰可看——没有这一声，"买了没有"只有切过去才知道。
+            // 按了一把没买过的枪：这一声是这个闸门的**可听出口**，也是键盘那条路唯一的出口——
+            // 1..6 是按 id 直指的，体系键那套"没得换就不出现"的可见性救不了它。
             audio.play(AudioCues.DENIED);
             return;
         }
         player.weaponId = id;
+        // 体系记忆：这一把就是"该体系里上一次手持的那把"。写在这道唯一的入口上，键盘与触屏
+        // 两条路才不会各记各的（判据同一条：只要武器换成了手里这一把，就盖一次）。
+        player.lastGunOfSchool[Balance.weapons[id].school] = id;
         audio.play(AudioCues.WEAPON_SWITCH);
         if (haptics != null) haptics.tick();
     }
@@ -2229,6 +2249,9 @@ public final class Game implements GameThread.Host {
         // 持有量清零之后，手里那把也可能已经不存在了：不钳回"局内一定有的那一把"，下一局开局就在
         // 打这一局没买过的导弹——那是"买了没效果"的反向版本（没买却有），同样没法解释也测不出来。
         if (!shopRun.weaponUnlocked(player.weaponId)) player.weaponId = Balance.Weapon.PULSE;
+        // 体系记忆随持有量一起清零：上一局买断过的激光不该成为这一局体系键的落点（理由见
+        // PlayerState.lastGunOfSchool，那条 bug 与上一句钳 weaponId 是同一个形状的反面）。
+        player.resetSchoolMemory();
         lastFlowPhase = WaveFlow.PREP;
         shopPending = false;
         shake = 0f;
@@ -2445,6 +2468,7 @@ public final class Game implements GameThread.Host {
             drawRadar(c);
             drawBombButton(c);
             drawSwitchButton(c);
+            drawSchoolButton(c);
             drawBossBar(c);
             // 暂停面板不接管 HUD：它靠 0.78 遮罩把整套读数压成背景，视线才落在面板的卡上
             if (modal == ModalStack.NONE) drawFpsPanel(c);
@@ -2707,7 +2731,7 @@ public final class Game implements GameThread.Host {
     }
 
     /**
-     * 切枪键：框里印**当前这一把**的名字，点一下换到下一把**买过的**。
+     * **模式键**（族内换枪）：框里印**当前这一把**的名字，点一下换到同体系里的下一把**买过的**。
      *
      * <p>画"手里是什么"而不是"下一次换成什么"：这一格同时是场上那条弹道的署名——玩家低头确认
      * 自己正在打什么的那一眼，比预知下一把有用（而且下一把要等他真按了才算数）。
@@ -2715,8 +2739,12 @@ public final class Game implements GameThread.Host {
      * <p>名字着色用武器自己的 {@code color}（{@code Balance.Weapon} 那一格），于是键上的字与
      * 飞出去的弹是同一个颜色：形状先于颜色，但颜色在这里是**对应关系**的免费提示，
      * 不必再画一个图标去说"这是枪"。字面量就是武器表的 name，不新增文案 ⇒ 没有第二个真源。
+     *
+     * <p>手持激光或导弹时**整块不画**（判据与命中那条同源，见 {@code ShopRun.modeKeyLive}）：
+     * 那两个体系各只有一把枪，这一枚按下去无事可换。
      */
     private void drawSwitchButton(Canvas c) {
+        if (!shopRun.modeKeyLive(player.weaponId)) return;
         fill.setColor(Ink.EDGE);
         rf.set(switchDraw.left, switchDraw.top, switchDraw.right, switchDraw.bottom);
         c.drawRect(rf, fill);
@@ -2725,6 +2753,30 @@ public final class Game implements GameThread.Host {
         text.setColor(w.color);
         SpriteFactory.draw(c, label, switchDraw.centerX() - label.getWidth() / 2,
                 switchDraw.centerY() - label.getHeight() / 2,
+                label.getWidth(), label.getHeight(), text);
+    }
+
+    /**
+     * **体系键**：框里印**当前这个体系**的名字（{@code Balance.Weapon.SCHOOL_NAMES}），点一下跳到
+     * 下一个买得起的体系。与模式键的分工就是他那句逐字的两半「体系键（子弹／激光／导弹）＋
+     * 模式键（族内换枪）」——一枚管"哪一族"，一枚管"这一族的哪一把"。
+     *
+     * <p>用**中性色**而不是武器自己的颜色：模式键那格的颜色是"场上飞着什么"的署名，两枚键同色会
+     * 把它们读成同一个东西的两半。这里要报的是结构（手里有几个体系），不是弹道。
+     *
+     * <p>只有一个体系可去时**整块不画**（判据 {@code ShopRun.schoolKeyLive}，与命中那条同源）：
+     * 出厂四把全在子弹族，没买那两张解锁卡之前，这一枚按下去无事可换。
+     */
+    private void drawSchoolButton(Canvas c) {
+        if (!shopRun.schoolKeyLive(player.weaponId)) return;
+        fill.setColor(Ink.EDGE);
+        rf.set(schoolDraw.left, schoolDraw.top, schoolDraw.right, schoolDraw.bottom);
+        c.drawRect(rf, fill);
+        String name = Balance.Weapon.SCHOOL_NAMES[player.weapon().school];
+        Bitmap label = uiText.bake(name, UI_PX, Ink.TEXT);
+        text.setColor(Ink.TEXT);
+        SpriteFactory.draw(c, label, schoolDraw.centerX() - label.getWidth() / 2,
+                schoolDraw.centerY() - label.getHeight() / 2,
                 label.getWidth(), label.getHeight(), text);
     }
 

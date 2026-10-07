@@ -1152,19 +1152,22 @@ public class ShopRulesTest {
      * （今天那条闸门是 {@code dogfightOn() && (guided || debugPulseDogfight)}，后半那枚只是调试包的
      * 观测口；这条用例钉的仍是**正常玩法**那半边，与它无关。）
      *
-     * <p>三段各钉一层，中间那个 {@code ShopRun.nextUnlockedWeapon} 就是切枪键按下时 {@code Game}
-     * 调的那一个函数：① 两张解锁卡都没买时，循环<b>永远</b>走不到导弹与激光；② 买了「基础导弹」
-     * 之后从脉冲起步、有限次点击必达导弹；③ 落到的那一格 {@code guided} 必须为真——否则③之前
-     * 那两层全对也仍然是"买了没效果"。
+     * <p>三段各钉一层，中间那个 {@code ShopRun.nextSchoolWeapon} 就是**体系键**按下时 {@code Game}
+     * 调的那一个函数：① 两张解锁卡都没买时，体系键根本不该出现（{@code schoolKeyLive} 为假），
+     * 就算强行按也<b>永远</b>走不到导弹与激光；② 买了「基础导弹」之后从脉冲起步、有限次点击必达导弹；
+     * ③ 落到的那一格 {@code guided} 必须为真——否则③之前那两层全对也仍然是"买了没效果"。
      */
     @Test
     public void touchInputReachesTheGuidedWeaponOnlyAfterTheUnlockCard() {
         ShopRun none = new ShopRun();
         assertFalse("导弹出厂即可用＝这张卡没卖出去", none.weaponUnlocked(Balance.Weapon.MISSILE));
         assertFalse("激光出厂即可用＝这张卡没卖出去", none.weaponUnlocked(Balance.Weapon.LASER));
+        assertFalse("只有一个体系可去却画出一枚体系键：那是一枚点了没反应的键",
+                none.schoolKeyLive(Balance.Weapon.PULSE));
+        int[] mem = freshSchoolMemory();
         int at = Balance.Weapon.PULSE;
         for (int i = 0; i < Balance.weapons.length * 2; i++) {
-            at = none.nextUnlockedWeapon(at);
+            at = none.nextSchoolWeapon(at, mem);
             assertNotEquals("没买解锁卡却切得到了导弹（键把玩家带向一把没有获取途径的枪）",
                     Balance.Weapon.MISSILE, at);
             assertNotEquals("没买解锁卡却切得到了激光", Balance.Weapon.LASER, at);
@@ -1175,14 +1178,18 @@ public class ShopRulesTest {
         assertFalse("解锁导弹不该顺带解锁激光（两张卡各卖一把，不是一把卖两样）",
                 run.weaponUnlocked(Balance.Weapon.LASER));
         assertFalse("买断卡第二级不该被接受", run.buyUpgrade(Balance.ShopCard.BASIC_MISSILE));
+        assertTrue("买了「基础导弹」却没有第二个体系可去＝体系键永远不出现，那张卡买了也够不着",
+                run.schoolKeyLive(Balance.Weapon.PULSE));
 
+        mem = freshSchoolMemory();
         int steps = 0;
         int cur = Balance.Weapon.PULSE;
-        while (cur != Balance.Weapon.MISSILE && steps < Balance.weapons.length) {
-            cur = run.nextUnlockedWeapon(cur);
+        while (cur != Balance.Weapon.MISSILE && steps < Balance.Weapon.SCHOOL_COUNT) {
+            cur = run.nextSchoolWeapon(cur, mem);
+            mem[Balance.weapons[cur].school] = cur;   // Game.selectWeapon 里那一句的镜像，见本条 javadoc
             steps++;
         }
-        assertEquals("按了 " + steps + " 次切枪键还没到导弹这一把", Balance.Weapon.MISSILE, cur);
+        assertEquals("按了 " + steps + " 次体系键还没到导弹这一把", Balance.Weapon.MISSILE, cur);
         assertTrue("落到的那一把不是制导弹：切到了也没走导弹那条仿真池",
                 Balance.weapons[cur].guided);
         assertEquals("guided 只该在导弹这一格为真（第二把制导武器要改的是分流判据，不是加一格）",
@@ -1190,40 +1197,91 @@ public class ShopRulesTest {
     }
 
     /**
-     * 切枪键走的是<b>已解锁那一圈</b>，不是 1..6 全表。
+     * **模式键**走的是<b>当前这个体系里已解锁的那几把</b>，不是 1..6 全表、也不是全表里已解锁的那一圈。
      *
      * <p>这一格同时钉着我替他做的一处裁量（收口报告里如实登记）：闸门只挂在激光与导弹两张卡上，
      * 散射／电弧／回旋<b>出厂即可切</b>——触屏玩家第一波就能按到 5 发弹的散射。他给的是
      * 「加个切换键」，没说那三把要不要一起锁；而"除了默认那把全锁"会让这枚键在开局变成一枚
      * 点了没反应的死键，那比多给两把更糟。所以下面期望的那一圈今天<b>真的</b>有四把。
      *
-     * <p>三条：① 没买卡时循环是 脉冲→散射→电弧→回旋→脉冲，激光与导弹两格被跳过；
-     * ② 每一按都换到<b>另一把</b>（原地返回的键在玩家眼里就是坏键）；③ 站在一把没解锁的枪上
-     * 也照样跳进这一圈——{@code Game.resetRun} 会避开那一格，但不该由那一句来保证键按得动。
+     * <p>2026-10-07 拆两级（他逐字「体系键（子弹／激光／导弹）＋模式键（族内换枪）」）之后，
+     * 那一圈**恰好还是同四个 id**——因为四把默认枪全在子弹这一族。所以这条用例的形状没变，
+     * 变的是它的**宾语**：从前钉的是"整圈不含没买的那两把"，现在钉的是"这一圈一步都不许离开子弹族"。
+     * 三条：① 环是 脉冲→散射→电弧→回旋→脉冲；② 激光与导弹各自独占一个体系，手持它们时这一枚
+     * <b>无事可换</b>，于是 {@code modeKeyLive} 必须为假（画出来就是死键，同炸弹那条口径）；
+     * ③ 买了激光也不会让子弹族那一圈里混进激光——它不属于这一族（那正是"两枚键又混回一枚"的形状）。
      */
     @Test
-    public void theSwitchKeyCyclesOnlyTheUnlockedGuns() {
+    public void theModeKeyCyclesOnlyWithinItsOwnSchool() {
         ShopRun none = new ShopRun();
         int[] ring = {Balance.Weapon.PULSE, Balance.Weapon.SHOT, Balance.Weapon.ARC,
                 Balance.Weapon.BOOMER};
         for (int i = 0; i < ring.length; i++) {
             assertEquals("从「" + Balance.weapons[ring[i]].name + "」按一次落错了格",
-                    ring[(i + 1) % ring.length], none.nextUnlockedWeapon(ring[i]));
-        }
-        for (int id = 0; id < Balance.weapons.length; id++) {
-            assertNotEquals("按下去换了个寂寞：" + Balance.weapons[id].name,
-                    id, none.nextUnlockedWeapon(id));
+                    ring[(i + 1) % ring.length], none.nextWeaponInSchool(ring[i]));
+            assertTrue("子弹族有四把，模式键此刻必须活着", none.modeKeyLive(ring[i]));
         }
 
+        // ② 单枪体系：模式键的原地返回就是它的真语义，所以那一枚键此刻不该出现在屏幕上
+        ShopRun both = new ShopRun();
+        assertTrue(both.buyUpgrade(Balance.ShopCard.BASIC_LASER));
+        assertTrue(both.buyUpgrade(Balance.ShopCard.BASIC_MISSILE));
+        assertEquals("激光族只有激光一把：模式键原地返回是唯一正确的答案",
+                Balance.Weapon.LASER, both.nextWeaponInSchool(Balance.Weapon.LASER));
+        assertFalse("手持激光还把模式键画出来＝画了一枚点了没反应的键", both.modeKeyLive(Balance.Weapon.LASER));
+        assertFalse("手持导弹同理", both.modeKeyLive(Balance.Weapon.MISSILE));
+
+        // ① 的另一半：买了激光也不会让子弹族那一圈里混进激光——它不属于这一族
+        assertEquals("子弹族的环里混进了激光（体系键与模式键又混回一枚了）",
+                Balance.Weapon.PULSE, both.nextWeaponInSchool(Balance.Weapon.BOOMER));
+    }
+
+    /**
+     * **体系键**：跳到下一个有枪可去的体系，并且**回到原处时落在上一次手持的那把**上。
+     *
+     * <p>后半条是这一枚键能不能用的分水岭。不按"上一次手持"落位的话，从回旋切去激光再切回来会掉到
+     * 脉冲——玩家要再按三次模式键才回到他刚在用的那把，**换出去的代价比按进来的大**，那枚键就成了
+     * "我不敢按"。这一格是新增的**局内**玩家状态（{@code PlayerState.lastGunOfSchool}），
+     * 由 {@code Game.resetRun} 随这一局的持有量一起清零。
+     *
+     * <p>⚠ 测试里那一行"落子即记账"是 {@code Game.selectWeapon} 里那一句的**镜像**，不是生产逻辑的复制：
+     * {@code Game} 是渲染类、JVM 直测不到，所以规则层只能把这份记忆当入参收着。这条镜像的意义正好
+     * 在于它把两半钉在一起——真有谁改了 Game 那一句而不改这里，落点就会从"回旋"退化成"脉冲"，
+     * 下面那条断言当场响。（比"两边各自都测不到"好，这是本仓一贯的把判据下沉到纯类的做法。）
+     */
+    @Test
+    public void theSchoolKeyJumpsSystemsAndLandsBackWhereItLeftOff() {
+        ShopRun both = new ShopRun();
+        assertTrue(both.buyUpgrade(Balance.ShopCard.BASIC_LASER));
+        assertTrue(both.buyUpgrade(Balance.ShopCard.BASIC_MISSILE));
+        int[] mem = freshSchoolMemory();
+        mem[Balance.Weapon.SCHOOL_BULLET] = Balance.Weapon.BOOMER;
+
+        assertEquals("子弹族起步，第一跳该到体系序里的下一格（激光）",
+                Balance.Weapon.LASER, both.nextSchoolWeapon(Balance.Weapon.BOOMER, mem));
+        mem[Balance.Weapon.SCHOOL_LASER] = Balance.Weapon.LASER;
+        assertEquals("再跳该到导弹", Balance.Weapon.MISSILE,
+                both.nextSchoolWeapon(Balance.Weapon.LASER, mem));
+        mem[Balance.Weapon.SCHOOL_MISSILE] = Balance.Weapon.MISSILE;
+        assertEquals("第三跳该回子弹族，而且落回**上一次手持的那把**回旋（不是脉冲）",
+                Balance.Weapon.BOOMER, both.nextSchoolWeapon(Balance.Weapon.MISSILE, mem));
+
+        // 没持过的体系落在该体系 id 序最小的那把：这是"第一次进那个体系"的落点，没有记忆可用
         ShopRun laser = new ShopRun();
         assertTrue(laser.buyUpgrade(Balance.ShopCard.BASIC_LASER));
-        assertEquals("买了「基础激光」却没接进这一圈",
-                Balance.Weapon.LASER, laser.nextUnlockedWeapon(Balance.Weapon.PULSE));
+        assertEquals("第一次进激光族该落在激光那把",
+                Balance.Weapon.LASER, laser.nextSchoolWeapon(Balance.Weapon.PULSE, freshSchoolMemory()));
 
-        ShopRun missile = new ShopRun();
-        assertTrue(missile.buyUpgrade(Balance.ShopCard.BASIC_MISSILE));
-        assertEquals("买了「基础导弹」却没接进这一圈",
-                Balance.Weapon.MISSILE, missile.nextUnlockedWeapon(Balance.Weapon.SHOT));
+        // 只有一个体系时这一枚键不出现；出现的那一枚必须真的换得动
+        assertFalse("出厂只有子弹族，体系键此刻是死键",
+                new ShopRun().schoolKeyLive(Balance.Weapon.PULSE));
+        assertTrue("买了激光就有第二个体系可去，此刻该画出来", laser.schoolKeyLive(Balance.Weapon.PULSE));
+        assertTrue("手持激光时也该画——回去就是靠这一枚", laser.schoolKeyLive(Balance.Weapon.LASER));
+    }
+
+    /** 一份"这一局哪一把都没持过"的体系记忆（与 {@code PlayerState} 构造函数填的是同一个数）。 */
+    private static int[] freshSchoolMemory() {
+        return new PlayerState().lastGunOfSchool;
     }
 
     private static int guidedCount() {

@@ -22,6 +22,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import com.flexiatom.pixelraider.core.RectI;
+import com.flexiatom.pixelraider.game.Balance;
 
 import org.junit.Test;
 
@@ -254,6 +255,58 @@ public class HudLayoutTest {
         assertEquals(A.height(), C.height());
         assertEquals("横向不跟着屏高长", A.left, C.left);
         assertTrue("键顶到了 Boss 血条", A.top > HudLayout.BOSS_BOTTOM);
+    }
+
+    /**
+     * 体系键（他 2026-10-07 逐字「<b>体系键</b>（子弹／激光／导弹）＋<b>模式键</b>（族内换枪）」）。
+     *
+     * <p>底部那一排从两枚变成三枚〔体系〕〔模式〕〔炸弹〕，而这条用例存在的意义就是把<b>第三枚不许
+     * 改动前两枚</b>钉住：切枪键与炸弹键的四组数是上一条用例逐字钉死的（158..192 × 294..314 与
+     * 200..234），新键只能往**左边**长。理由与 {@code HudLayout.schoolRect} 那段一致：两枚换枪键相邻、
+     * 把手常驻那一指横扫两格就够，"清场"单独留在最右下角。
+     *
+     * <p>⚠ 三枚键的中心间隔只有 {@code SWITCH_W + SWITCH_GAP = 42} 逻辑像素，而 {@code Widgets.hitRect}
+     * 把命中框按中心外扩到 48dp 下限 ⇒ 低分辨率屏上三框必交叠。重叠区谁赢是 {@code Game.onPointerDown}
+     * 的判序（体系 → 模式 → 炸弹），下面那两条"中心不越进对方框"只保证<b>认真按不会走错</b>。
+     */
+    @Test
+    public void schoolKeyExtendsTheBottomRowLeftwardsWithoutMovingTheOtherTwo() {
+        HudLayout.schoolRect(320, A);
+        assertEquals(116, A.left);
+        assertEquals(294, A.top);
+        assertEquals(150, A.right);
+        assertEquals(314, A.bottom);
+        HudLayout.switchRect(320, B);
+        HudLayout.bombRect(320, C);
+        assertEquals("三枚键不同一条底线", C.bottom, A.bottom);
+        assertEquals("三枚键不同一条顶线", C.top, A.top);
+        assertEquals("底部那一排必须看起来是一排", C.width(), A.width());
+        assertTrue("体系键压上了模式键的绘制框", A.right < B.left);
+        assertTrue("体系键的中心越进了模式键框", (A.left + A.right) / 2 < B.left);
+        // 加这一枚不许动那两枚的数：它们各自被上一条用例逐字钉着，这里再钉一次"为什么没挪"
+        assertEquals("切枪键被体系键挤走了", 158, B.left);
+        assertEquals("炸弹键被挤走了", 200, C.left);
+        // 高屏那一档跟着底边长，横向不跟着
+        HudLayout.schoolRect(533, A);
+        assertEquals(527, A.bottom);
+        assertTrue("体系键顶到了 Boss 血条", A.top > HudLayout.BOSS_BOTTOM);
+    }
+
+    /**
+     * 体系键上印的是 {@code Balance.Weapon.SCHOOL_NAMES}，与武器名同一条宽度前提（一字一格 ×12 ≤ 34）。
+     *
+     * <p>这条单独存在而不是并进 {@code everyWeaponNameFitsTheSwitchKey}：那张表是**三格**、会独立增删
+     * （成长树分流派那天要读的就是同一份），标签居中画的溢出**不裁切**、只从两侧各压一点到战斗区里，
+     * 那种错法没人会当场看见。
+     */
+    @Test
+    public void everySchoolNameFitsTheSchoolKey() {
+        for (String name : Balance.Weapon.SCHOOL_NAMES) {
+            assertTrue(name + " 在体系键上画不下（一字一格 ×12）",
+                    name.length() * 12 <= HudLayout.SCHOOL_W);
+        }
+        assertEquals("体系名与 Balance.Weapon.SCHOOL_COUNT 不同长：加体系要同时加名字，否则键上会越界",
+                Balance.Weapon.SCHOOL_COUNT, Balance.Weapon.SCHOOL_NAMES.length);
     }
 
     /**

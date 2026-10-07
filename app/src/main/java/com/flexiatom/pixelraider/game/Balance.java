@@ -1541,47 +1541,78 @@ public final class Balance {
          * 而仿真体要活过引信、自爆、战斗部三个阶段。
          */
         public boolean guided;
+        /**
+         * [归属] 这一把属于哪一个**体系**——底部那枚体系键的分组依据（{@code ShopRun} 的两条循环各自读它）。
+         *
+         * <p>这个词不是新造的。他 2026-09-26 逐字「成长树我打算分几个流派，目前暂定"<b>子弹</b>"、
+         * "<b>激光</b>"、"<b>导弹</b>"几个大类，下面后续会设计小类」（见
+         * {@code growth-tree-schools-pause-shop} 的 I-1），2026-10-07 又用同一个三分法给了切枪的形状：
+         * 「<b>体系键</b>（子弹／激光／导弹）＋<b>模式键</b>（族内换枪）」（见 {@code weapon-system-vs-mode-switch}）。
+         * 所以这一格同时是**切枪的分组**与将来**成长树分家的同一份答案**——两处各写一张表，
+         * 迟早会变成"按体系涨价"与"按体系换枪"指向不同的枪。
+         *
+         * <p>归类按**物理形态**而不是按名字的字面：子弹 = {脉冲, 散射, 电弧, 回旋}（全都走 {@code shots} 池、
+         * 直飞、命中即消失），激光 = {激光}，导弹 = {导弹}。⚠ 「电弧」两个字听着像能量侧，但它今天的实现
+         * 就是一枚弹（{@code pellets=1}、直飞、{@code guided=false}），所以它留在子弹这一族——
+         * <b>这一格记的是场上真存在的东西，不是名字给人的直觉</b>。他若哪天把电弧做成链式放电（规格 §三
+         * 那句「链式分叉闪电」本来就是这么描述它的），那一格跟着挪，本条归类要重读。
+         *
+         * <p>⚠ 它与 {@link #guided} 今天回答的是**两个问题**（归属 vs 走哪个弹池），所以两个字段并存不算重复；
+         * 但它们的差集目前为空。第三形态（光束）落地那天，分流判据要收到这一格上来，
+         * {@link #guided} 那条「必须是布尔」的理由随之改写——它防的正是"第二把制导武器悄悄漏掉"。
+         */
+        public final int school;
 
-        Weapon(int id, String name, int shape) {
+        Weapon(int id, String name, int shape, int school) {
             this.id = id;
             this.name = name;
             this.shape = shape;
+            this.school = school;
         }
+
+        /**
+         * 体系编号**就是体系键的循环顺序**（子弹 → 激光 → 导弹 → 回到子弹）。
+         * 没有另开一张顺序表：两张表会各自漂移，而"下一格落在哪个体系"只有一个答案才算对。
+         */
+        public static final int SCHOOL_BULLET = 0, SCHOOL_LASER = 1, SCHOOL_MISSILE = 2;
+        public static final int SCHOOL_COUNT = 3;
+        /** 键上印的名字，下标与上面三个编号对齐；各两字 ⇒ 与武器名同一条宽度前提（{@code HudLayoutTest}）。 */
+        public static final String[] SCHOOL_NAMES = {"子弹", "激光", "导弹"};
 
         public static final int PULSE = 0, LASER = 1, SHOT = 2, MISSILE = 3, ARC = 4, BOOMER = 5;
 
         static Weapon[] makeAll() {
             // [可调] 全部是起点值。形态先于颜色：shape 决定画成什么，color 只是辨识度。
             Weapon[] a = new Weapon[6];
-            a[PULSE] = new Weapon(PULSE, "脉冲", 0);
+            a[PULSE] = new Weapon(PULSE, "脉冲", 0, SCHOOL_BULLET);
             a[PULSE].fireGap = 0.14f; a[PULSE].damage = 3; a[PULSE].critPercent = 8;
             a[PULSE].pellets = 1; a[PULSE].bulletSpeed = 420f;
             a[PULSE].color = 0xFF00E5FF; a[PULSE].size = 3f;
 
-            a[LASER] = new Weapon(LASER, "激光", 1);
+            a[LASER] = new Weapon(LASER, "激光", 1, SCHOOL_LASER);
             a[LASER].fireGap = 0.09f; a[LASER].damage = 1; a[LASER].critPercent = 4;
             a[LASER].pellets = 1; a[LASER].bulletSpeed = 620f;
             a[LASER].color = 0xFFEFD9FF; a[LASER].size = 2f;
             // 激光是"长刃"形态：唯一一把绘制长度不是 1.7 倍的武器，画出来才是那道束。
             a[LASER].drawLenRatioY = 3.4f;
 
-            a[SHOT] = new Weapon(SHOT, "散射", 2);
+            a[SHOT] = new Weapon(SHOT, "散射", 2, SCHOOL_BULLET);
             a[SHOT].fireGap = 0.30f; a[SHOT].damage = 2; a[SHOT].critPercent = 10;
             a[SHOT].pellets = 5; a[SHOT].bulletSpeed = 340f;
             a[SHOT].color = 0xFFFFB347; a[SHOT].size = 3f; a[SHOT].spreadDeg = 44f;
 
-            a[MISSILE] = new Weapon(MISSILE, "导弹", 3);
+            a[MISSILE] = new Weapon(MISSILE, "导弹", 3, SCHOOL_MISSILE);
             a[MISSILE].fireGap = 0.46f; a[MISSILE].damage = 6; a[MISSILE].critPercent = 12;
             a[MISSILE].pellets = 2; a[MISSILE].bulletSpeed = 220f;
             a[MISSILE].color = 0xFFFF5C7A; a[MISSILE].size = 4f; a[MISSILE].spreadDeg = 26f;
             a[MISSILE].guided = true;           // 走 missile-warhead-sim 的独立仿真池
 
-            a[ARC] = new Weapon(ARC, "电弧", 5);
+            a[ARC] = new Weapon(ARC, "电弧", 5, SCHOOL_BULLET);
             a[ARC].fireGap = 0.26f; a[ARC].damage = 4; a[ARC].critPercent = 15;
             a[ARC].pellets = 1; a[ARC].bulletSpeed = 300f;
             a[ARC].color = 0xFF9BF0FF; a[ARC].size = 3f;
 
-            a[BOOMER] = new Weapon(BOOMER, "回旋", 4);
+            a[BOOMER] = new Weapon(BOOMER, "回旋", 4, SCHOOL_BULLET);
             a[BOOMER].fireGap = 0.38f; a[BOOMER].damage = 5; a[BOOMER].critPercent = 10;
             a[BOOMER].pellets = 2; a[BOOMER].bulletSpeed = 260f;
             a[BOOMER].color = 0xFF8CFF9E; a[BOOMER].size = 4f; a[BOOMER].spreadDeg = 18f;

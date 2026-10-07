@@ -231,6 +231,31 @@ public final class HudLayout {
         out.set(right - SWITCH_W, bottom - SWITCH_H, right, bottom);
     }
 
+    // ---- 体系键（同一条底线上、切枪键的左手边）--------------------------------------------------
+
+    /**
+     * 体系键：底部那一排现在是<b>三枚</b>——〔体系〕〔模式(切枪)〕〔炸弹〕，从左到右。
+     *
+     * <p>为什么加第三枚而不是把原来那一枚改成"长按换体系"：他 2026-10-07 逐字把切换拆成两件事
+     * 「体系键（子弹／激光／导弹）＋模式键（族内换枪）」，而手势侧已经没有位置——双击给了超载、
+     * 短按是走位（{@code HudLayout.SWITCH_GAP} 那段自述记着这条）。
+     *
+     * <p>摆在切枪键的**左手边**而不是右边：右边那颗是炸弹，两枚换枪键相邻、把手常驻的那一指
+     * 横扫两格就能覆盖"换什么"，而"清场"单独留在最右下角，与它自己那条命中优先级一致。
+     *
+     * <p>⚠ 三枚键的**命中框**由 {@code Widgets.hitRect} 各自按中心外扩到 48dp 下限，中心间隔只有
+     * {@code SWITCH_W + SWITCH_GAP = 42} 逻辑像素 ⇒ 低分辨率屏上三框必交叠。判序见
+     * {@code Game.onPointerDown}：体系 → 模式 → 炸弹，误判一律落在"多按一次就能撤回"的那一侧。
+     */
+    public static final int SCHOOL_W = SWITCH_W, SCHOOL_H = SWITCH_H;
+    public static final int SCHOOL_GAP = SWITCH_GAP;
+
+    public static void schoolRect(int battleHeight, RectI out) {
+        int bottom = battleHeight - BOMB_INSET;
+        int right = W - BOMB_INSET - BOMB_W - SWITCH_GAP - SWITCH_W - SCHOOL_GAP;
+        out.set(right - SCHOOL_W, bottom - SCHOOL_H, right, bottom);
+    }
+
     public static void bossLabelRect(RectI out) {
         out.set(BOSS_LEFT, BOSS_LABEL_TOP, BOSS_RIGHT, BOSS_LABEL_BOTTOM);
     }

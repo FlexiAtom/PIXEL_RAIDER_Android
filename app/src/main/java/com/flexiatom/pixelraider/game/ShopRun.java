@@ -259,6 +259,12 @@ public final class ShopRun {
      * {@link #pelletBonus(int)} 那条「激光不吃」同一形状——武器与商品的对应关系只在**持有量**
      * 这一层有意义，烙进武器表就等于把商店的知识搬进配置表（那边一改价，这边不会跟着动）。
      *
+     * <p>这句与 {@code Balance.Weapon.school} 那一格**不是同一件事**，别拿这条去否决那格：这一条拒的是
+     * "归属 = 这张卡卖的那一把"（商店的知识）；那一格记的是"归属 = 这一把在场上是什么形态"
+     * （子弹／激光／导弹），与 {@link Balance.Weapon#guided} 同类，本来就住在配置表该管的范围里。
+     * 武器没买 ⇒ 那个体系没有可落的位置；体系键因此不出现（{@link #schoolKeyLive}），
+     * 而不是出现且按了没反应。
+     *
      * @param weaponId {@link Balance.Weapon} 的武器 id
      */
     public boolean weaponUnlocked(int weaponId) {
@@ -268,26 +274,78 @@ public final class ShopRun {
     }
 
     /**
-     * 从 {@code currentId} 往后数**第一把我有的**，绕一圈。这一格只属于底部那枚切枪键；
-     * 键盘 1..6 报的是**绝对 id**，它走的是 {@code Game.selectWeapon} 那道闸门——两条路的
-     * 持有判据是同一个（{@link #weaponUnlocked}），所以"没买过的枪按下去会不会响"只有一个答案，
-     * 而"下一把换成谁"只有触屏需要算。
+     * **模式键**（族内换枪）：从 {@code currentId} 起，在**它所属的那个体系内**往后数第一把我有的枪，
+     * 绕一圈。他 2026-10-07 逐字把底部那一枚键拆成两枚：「<b>体系键</b>（子弹／激光／导弹）＋
+     * <b>模式键</b>（族内换枪）」。今天这一条只回答后半句。
      *
-     * <p>循环而不是列表：六把枪按 id 排开，玩家要的是一次点击换一把，不是打开一个选择面板——
-     * 后者在战斗里是两次点击加一次遮挡，而他给的是「加个切换键」（一个键）。
+     * <p>循环而不是列表：他要的是一次点击换一把，不是打开一个选择面板——后者在战斗里是两次点击
+     * 加一次遮挡，而他给的是「加个切换键」（一个键）；拆两级之后"打开面板"这一格更没有位置了，
+     * 因为两级键已经占满底部那一排。
      *
-     * <p>最后那句 {@code return currentId} 是**编译器要求的收尾**，不是一道防御：今天四把默认枪
-     * 永远解锁，所以这个循环按构造必定找到一把别的（{@code ShopRulesTest} 里那条"每按一次必换"
-     * 断的就是它）。真有一天有人把剩下三把也挂上闸门，那一格才第一次可达——届时它的语义是
-     * "只有一把枪时这枚键按了没反应"，那仍然不是一种错误，所以既不抛也不返回 -1。
+     * <p>最后那句 {@code return currentId} 不是防御，是**这一枚键在该体系只剩一把枪时的真语义**——
+     * 激光与导弹各自独占一个体系（{@code Balance.Weapon.school} 那张表），手持它们时这条循环必定空转。
+     * 空转的键不该出现：{@link #modeKeyLive} 就是画不画、命中注不注册的那道判据，与炸弹键
+     * 「没有存货就不注册命中：一颗点不动的按钮比没有按钮更糟」同一条口径。
      */
-    public int nextUnlockedWeapon(int currentId) {
+    public int nextWeaponInSchool(int currentId) {
+        int school = Balance.weapons[currentId].school;
         int n = Balance.weapons.length;
         for (int k = 1; k < n; k++) {
             int id = (currentId + k) % n;
-            if (weaponUnlocked(id)) return id;
+            if (Balance.weapons[id].school == school && weaponUnlocked(id)) return id;
         }
         return currentId;
+    }
+
+    /** 模式键按下去会不会换：当前这一把所属体系里**还有第二把我有的枪**。判据与 {@link #nextWeaponInSchool} 同源。 */
+    public boolean modeKeyLive(int currentId) {
+        int school = Balance.weapons[currentId].school;
+        int n = Balance.weapons.length;
+        for (int k = 1; k < n; k++) {
+            int id = (currentId + k) % n;
+            if (Balance.weapons[id].school == school && weaponUnlocked(id)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * **体系键**：跳到下一个**有枪可持**的体系，落在"那个体系里上一次手持的那把"（{@code lastGunOfSchool}，
+     * 没有记录则落在那体系 id 序最小的那把）。
+     *
+     * <p>为什么循环以「上一次手持」落位而不是"永远落在第一把"：不按这一格，从回旋切去激光再切回来
+     * 会掉到脉冲，玩家要按三次模式键才能回到自己刚在用的那把——**换出去的代价比按进来的大**，
+     * 那枚键就成了"我不敢按"。代价说清：这是一份新增的玩家状态（一格数组），由 {@code Game.resetRun}
+     * 随这一局的持有量一起清零；不清的话上一局买过的激光会在这一局没买的时候被当成落点递出去。
+     *
+     * @param lastGunOfSchool 下标 = 体系编号，值 = 那一体系里上一次手持的武器 id；<b>-1 = 这一局还没持过</b>
+     */
+    public int nextSchoolWeapon(int currentId, int[] lastGunOfSchool) {
+        int from = Balance.weapons[currentId].school;
+        for (int k = 1; k < Balance.Weapon.SCHOOL_COUNT; k++) {
+            int school = (from + k) % Balance.Weapon.SCHOOL_COUNT;
+            int remembered = lastGunOfSchool[school];
+            if (remembered >= 0) return remembered;
+            int first = firstUnlockedGunOfSchool(school);
+            if (first >= 0) return first;
+        }
+        return currentId;
+    }
+
+    /** 体系键按下去会不会换：**除当前这一体系外，还有第二个体系有枪可持**。买断那两张解锁卡是唯一的入口。 */
+    public boolean schoolKeyLive(int currentId) {
+        int from = Balance.weapons[currentId].school;
+        for (int school = 0; school < Balance.Weapon.SCHOOL_COUNT; school++) {
+            if (school != from && firstUnlockedGunOfSchool(school) >= 0) return true;
+        }
+        return false;
+    }
+
+    /** 那个体系里我有的第一把（id 序）；一把都没有 ⇒ -1。这一格是两条判据的**共同**读数点。 */
+    private int firstUnlockedGunOfSchool(int school) {
+        for (Balance.Weapon w : Balance.weapons) {
+            if (w.school == school && weaponUnlocked(w.id)) return w.id;
+        }
+        return -1;
     }
 
     private float mul(int cardId, float perLevel) {
