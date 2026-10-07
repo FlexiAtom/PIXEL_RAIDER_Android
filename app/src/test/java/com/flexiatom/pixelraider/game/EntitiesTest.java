@@ -430,10 +430,12 @@ public class EntitiesTest {
      * 留下一条"测试专用的一次打完 N 发"的路径就等于让测试跑在生产代码不走的那条路上——
      * 弹链改造后生产路径横跨 C 个时隙，只有照它的帧顺序喂时间，量到的间距才是屏幕上的间距。
      *
-     * <p>{@code missiles} 给 {@link Balance.Weapon#guided} 那把枪用；其余武器传 null 即可
-     * （链只在模板是制导的时候才读它，读不到就抛——见 {@link BulletChain#step}）。
+     * <p>{@code missiles}/{@code beams} 分别给 {@link Balance.Weapon#SCHOOL_MISSILE} 与
+     * {@link Balance.Weapon#SCHOOL_LASER} 那两把枪用；其余武器传 null 即可
+     * （链只在模板是那个体系的时候才读那张池，读不到就抛——见 {@link BulletChain#step}）。
      */
     private static int fireGeneration(BulletChain chain, BulletPool pool, Missiles missiles,
+                                      Beams beams,
                                       Balance.Weapon w,
                                       int pellets, float period, WeaponFire.Template tpl,
                                       float speedMul, float attackMul, int flatDamage,
@@ -443,7 +445,7 @@ public class EntitiesTest {
         chain.beginGeneration(tpl);
         int made = 0;
         while (chain.remaining() > 0) {
-            made += chain.step(DT, 120f, 300f, pool, missiles);
+            made += chain.step(DT, 120f, 300f, pool, missiles, beams);
             pool.stepAndCompact(DT, W, 533, 16);
         }
         return made;
@@ -472,7 +474,7 @@ public class EntitiesTest {
         BulletChain chain = new BulletChain();
         WeaponFire.Template tpl = new WeaponFire.Template();
         Balance.Weapon shot = Balance.weapons[Balance.Weapon.SHOT];      // 5 发、张角 44°
-        int made = fireGeneration(chain, pool, null, shot, Math.max(1, shot.pellets), shot.fireGap,
+        int made = fireGeneration(chain, pool, null, null, shot, Math.max(1, shot.pellets), shot.fireGap,
                 tpl, 1f, 1f, 0, 0.9f, 0);
         assertEquals(5, made);
         assertEquals(5, pool.activeCount());
@@ -504,7 +506,7 @@ public class EntitiesTest {
         // 量的是**沿弹道方向**的两点距离而不是 Δy——斜着飞的列，Δy 会被 cos 削短，
         // 而两发同速同向，它们的真实间隔恒等于 interval·speed。
         pool.clear();
-        made = fireGeneration(chain, pool, null, shot, 9, shot.fireGap, tpl, 1f, 1f, 0, 0.9f, 0);
+        made = fireGeneration(chain, pool, null, null, shot, 9, shot.fireGap, tpl, 1f, 1f, 0, 0.9f, 0);
         assertEquals(9, made);
         Bullet first = pool.activeAt(0), second = pool.activeAt(8);
         float along = (float) Math.hypot(first.x - second.x, first.y - second.y);
@@ -598,9 +600,9 @@ public class EntitiesTest {
         BulletChain chain = new BulletChain();
         WeaponFire.Template tpl = new WeaponFire.Template();
         Balance.Weapon boomer = Balance.weapons[Balance.Weapon.BOOMER];   // 2 发
-        assertEquals(2, fireGeneration(chain, pool, null, boomer, 2, boomer.fireGap, tpl, 1f, 1f, 0, 0.5f, 0));
+        assertEquals(2, fireGeneration(chain, pool, null, null, boomer, 2, boomer.fireGap, tpl, 1f, 1f, 0, 0.5f, 0));
         assertEquals("再打一代照样两发出膛", 2,
-                fireGeneration(chain, pool, null, boomer, 2, boomer.fireGap, tpl, 1f, 1f, 0, 0.5f, 0));
+                fireGeneration(chain, pool, null, null, boomer, 2, boomer.fireGap, tpl, 1f, 1f, 0, 0.5f, 0));
         assertEquals(2, pool.activeCount());
         assertEquals("两次腾位各淘汰一发", 2L, pool.evictTotal());
         assertEquals("一次都没有拒发", 0L, pool.refuseTotal());
@@ -609,29 +611,42 @@ public class EntitiesTest {
     /**
      * 六把枪各打一代：**每一代的全部弹丸都落在它该落的那张池里**，一张不多、一张不少。
      *
-     * <p>"落在哪张池"是 {@link BulletChain#step} 里全项目唯一的制导分叉，所以这条同时是
-     * 那个分叉的钉据：导弹进 {@code shots} 池（走不到战斗部结算）或别的枪误进仿真池
-     * （被当成仿真体导引），都会在这里红。
+     * <p>"落在哪张池"是 {@link BulletChain#step} 里全项目唯一的按 {@code school} 三向分流，
+     * 所以这条同时是那个分叉的钉据：导弹进 {@code shots} 池（走不到战斗部结算）、激光占了
+     * {@code shots} 名额（那就根本是直飞弹，不是光束）、别的枪误进仿真池（被当成仿真体导引），
+     * 都会在这里红。
+     *
+     * <p>激光那三支里**束数不是发数**：链一次时隙只冒一列（{@code pellets == 1}），所以
+     * {@code made} 就是束数，而 {@code beams} 里同时亮着的束会被 {@code lifeSec} 叠住——这条
+     * helper 不推进束的寿命，排完一代正好数到 {@code made} 道。
      */
     @Test
     public void everyWeaponMakesAtLeastOneBullet() {
         BulletPool pool = new BulletPool(Balance.bullet.capacity);
         Missiles missiles = new Missiles(8);
+        Beams beams = new Beams(Balance.beam.capacity);
         BulletChain chain = new BulletChain();
         WeaponFire.Template tpl = new WeaponFire.Template();
         for (Balance.Weapon w : Balance.weapons) {
             pool.clear();
             missiles.clear();
-            int made = fireGeneration(chain, pool, missiles, w, Math.max(1, w.pellets), w.fireGap,
-                    tpl, 1f, 1f, 0, 0.5f, 0);
+            beams.clear();
+            int made = fireGeneration(chain, pool, missiles, beams, w, Math.max(1, w.pellets),
+                    w.fireGap, tpl, 1f, 1f, 0, 0.5f, 0);
             assertTrue(w.name + " 一发都打不出", made >= 1);
             assertEquals(w.name + " 的弹丸数对不上", Math.max(1, w.pellets), made);
             assertEquals(w.name + " 排完就该没有剩余时隙", 0, chain.remaining());
-            if (w.guided) {
+            if (w.school == Balance.Weapon.SCHOOL_MISSILE) {
                 assertEquals(w.name + " 是制导武器，弹不该出现在 shots 池", 0, pool.activeCount());
                 assertEquals(w.name + " 没进仿真池", made, missiles.activeCount());
+                assertEquals(w.name + " 制导弹不该产生光束", 0, beams.activeCount());
+            } else if (w.school == Balance.Weapon.SCHOOL_LASER) {
+                assertEquals(w.name + " 是光束，不该占 shots 池名额", 0, pool.activeCount());
+                assertEquals(w.name + " 不该进仿真池", 0, missiles.activeCount());
+                assertEquals(w.name + " 没进光束池", made, beams.activeCount());
             } else {
                 assertEquals(w.name + " 不制导却进了仿真池", 0, missiles.activeCount());
+                assertEquals(w.name + " 不发光束却进了光束池", 0, beams.activeCount());
                 assertEquals(w.name + " 的弹没全进 shots 池", made, pool.activeCount());
             }
             assertTrue(w.name + " 没有颜色", w.color != 0);

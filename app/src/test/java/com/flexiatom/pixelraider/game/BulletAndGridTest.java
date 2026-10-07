@@ -197,7 +197,8 @@ public class BulletAndGridTest {
      * <p>过屏距离按<b>最高屏</b>（{@code Screen.LOGIC_H_MAX} = 21:9 机型）再加 24：机头出膛点在机体
      * 上方 8、出界回收余量 16（都在 {@code Game}：{@code stepChain} 的 {@code player.y - 8f} 与
      * {@code MARGIN}），机体最远坐在画布底边 ⇒ 净 8 + 16 = 24。代数向上取整，多算的是"两代重叠"
-     * 的那一代。制导弹不进 shots 池（走 {@code Missiles}），按表里的 {@code w.guided} 跳过。
+     * 的那一代。制导弹与光束都不进 shots 池（分别走 {@code Missiles}/{@code Beams}），按表里的
+     * {@code w.school} 只留子弹体系。
      */
     @Test
     public void playerBulletPeakAtTheIncomeCapBuildFitsThePool() {
@@ -211,7 +212,7 @@ public class BulletAndGridTest {
         int peak = 0;
         Balance.Weapon peakGun = null;
         for (Balance.Weapon w : Balance.weapons) {
-            if (w.guided) continue;
+            if (w.school != Balance.Weapon.SCHOOL_BULLET) continue;
             float cd = w.fireGap / mul;
             float period = (float) Math.ceil(cd / Time.STEP) * Time.STEP;
             float transit = Math.min((Screen.LOGIC_H_MAX + 24f) / w.bulletSpeed,
@@ -223,7 +224,7 @@ public class BulletAndGridTest {
                 peakGun = w;
             }
         }
-        assertNotNull("一把武器都没进扫描（全被 {@code guided} 跳过，或武器表空了）："
+        assertNotNull("一把武器都没进扫描（全被非子弹体系跳过，或武器表空了）："
                 + "下面两条断言就成了对着 null 的假绿", peakGun);
         assertTrue(peakGun.name + " 在最坏 build 下在屏 " + peak + " 发，超出池容量 "
                 + Balance.bullet.capacity + " ⇒ 会开始淘汰玩家自己的弹", peak <= Balance.bullet.capacity);

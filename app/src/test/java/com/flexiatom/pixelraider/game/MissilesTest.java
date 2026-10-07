@@ -126,7 +126,8 @@ public final class MissilesTest {
         Balance.Weapon gun = Balance.weapons[Balance.Weapon.MISSILE];
         WeaponFire.Template t = new WeaponFire.Template();
         WeaponFire.fillTemplate(t, gun, 1f, 1f, 0, 0.99f, 0);
-        assertTrue("前提：这把枪不走制导分支的话，这条测的是弹池", t.guided);
+        assertTrue("前提：这把枪不走制导分支的话，这条测的是弹池",
+                t.school == Balance.Weapon.SCHOOL_MISSILE);
 
         Missiles pool = new Missiles(2);
         for (int i = 0; i < 5; i++) {

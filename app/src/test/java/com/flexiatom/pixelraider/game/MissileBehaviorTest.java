@@ -1180,20 +1180,24 @@ public final class MissileBehaviorTest {
      * 速度带必须包含出膛速度（§1.6 那条 ⚠）。{@code stallSpeed / thrust / dragK / bulletSpeed}
      * 是四张独立旋钮，带被调空时**不报错、不 NaN**，只是速率变成一个与 {@code thrust} 无关的常数
      * ——又一种静默失效。现值 120 ≤ 220 ≤ 240。
+     *
+     * <p>判据读的是**体系**而不是当年那个 {@code guided} 布尔：只有走 {@link Missiles} 仿真池的
+     * 那一族才有"出膛速度落进推力/阻力带"这件事要守。激光那一行的 {@code bulletSpeed} 如今只剩
+     * 弹链时隙一个读者（光束不积分），把它算进来就是拿一条不存在的约束去评一条不存在的机制。
      */
     @Test
     public void everyGuidedWeaponLaunchesInsideTheSpeedBand() {
-        int guided = 0;
+        int missileSchool = 0;
         float floor = spec.stallSpeed;
         float ceiling = spec.thrust / spec.dragK;
         for (Balance.Weapon w : Balance.weapons) {
-            if (!w.guided) continue;
-            guided++;
+            if (w.school != Balance.Weapon.SCHOOL_MISSILE) continue;
+            missileSchool++;
             assertTrue(w.name + " 的出膛速度 " + w.bulletSpeed + " 落在速度带 [" + floor + ", "
                             + ceiling + "] 之外 ⇒ clamp 会把它压成一个与 thrust 无关的常数",
                     w.bulletSpeed >= floor && w.bulletSpeed <= ceiling);
         }
-        assertTrue("一把制导武器都没有 ⇒ 这条在空转", guided > 0);
+        assertTrue("一把导弹体系的枪都没有 ⇒ 这条在空转", missileSchool > 0);
     }
 
     // ---- 九、格斗导弹：第二条流（簇 II C2）--------------------------------------------------

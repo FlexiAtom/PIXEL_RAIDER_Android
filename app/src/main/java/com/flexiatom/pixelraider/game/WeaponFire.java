@@ -19,22 +19,27 @@
 package com.flexiatom.pixelraider.game;
 
 /**
- * 开火（纯算术）：把「一把武器的形态 + 此刻的伤害账」翻译成**一发**子弹。
+ * 开火（纯算术）：把「一把武器的形态 + 此刻的伤害账」翻译成**一发**出膛实体。
  *
  * 「一代 N 发怎么排」不在这里——那是 {@link BulletChain} 的事。本类只负责出膛这一刻把模板
  * 写进池，所以它一次只发一发，且**不做任何除法**（角度由调用方按列号现算或读缓存）。
  *
  * 弹道形态先于颜色（规格 §零：形态先于颜色是像素游戏的可读性底线）：
- * - 单发（脉冲/激光/电弧）：正上方一条线；
+ * - 单发（脉冲／电弧）：正上方一条线；
  * - 多弹丸（散射/导弹/回旋）：按 {@link Balance.Weapon#spreadDeg} 对称张开——张的是**列与列之间**，
  *   所以只有当一代排成多列时才看得见。横向优先之后这不再是三把枪的专利：{@code N ≥ 2} 就铺成
  *   {@code N} 列（脉冲/电弧买扳机卡也会张开成扇面），只有 {@code N == 1} 才是那条竖链。
+ *
+ * 三条流、三个出膛函数，**共用同一份模板**（伤害、暴击、颜色、武器号一次判定整代共享）：
+ * {@link #fireOne} 直飞弹丸、{@link #fireBeam} 瞬时光束、{@link #fireMissile} 仿真体。
  *
  * 非制导弹**一律直飞**：弹道在出膛这一刻定死，之后只由 {@code BulletPool.stepAndCompact} 积分。
  * 先前那套"导弹每帧由 {@code steerHoming} 修正方向"是假追踪（指数逼近、无转弯率上限、
  * 无视目标视场），2026-09-25 提案 unguide-bullets 已整体删除。真仿真的导弹走
  * {@link Missiles} 独立池与 {@link MissileBehavior}（提案 missile-warhead-sim）：它同样在这里
  * 出膛（继承弹速与方向），但**之后怎么飞**不由弹的积分决定。
+ * 激光那一族走第三条：{@link Beams}，**根本不飞**（他 2026-10-07 逐字「激光体系是完全没做的
+ * （甚至是打的子弹而不是激光）」，裁定取丙＝独立光束池，见池件 {@code laser-weapon-form}）。
  *
  * 随机数由调用方给（{@code roll01}）：本类不 new Random，测试才能钉住"这次是不是暴击"。
  * 暴击固定 ×2（[可调]，成长树里的"暴击 +2%"加的是 {@code critPercent}，不是倍率）。
@@ -66,12 +71,18 @@ public final class WeaponFire {
         /** 这一代的暴击判定结果：判定一次，整代共享。 */
         public boolean crit;
         /**
-         * 走哪张池：true = {@link Missiles}（仿真体，之后由 {@link MissileBehavior} 导引），
-         * false = {@link BulletPool}（直飞）。唯一读者是 {@link BulletChain#step} 的那个分支——
-         * 全项目**只有那一处**按制导与否分流，所以它是模板的一个字段而不是让链去查武器表：
-         * 链在开火那一刻已经把 {@code w} 丢了。
+         * 走哪张池：{@link Balance.Weapon#SCHOOL_BULLET} = {@link BulletPool}（直飞弹丸）、
+         * {@code SCHOOL_LASER} = {@link Beams}（瞬时光束）、{@code SCHOOL_MISSILE} =
+         * {@link Missiles}（仿真体，之后由 {@link MissileBehavior} 导引）。
+         *
+         * <p>它是模板的一个字段而不是让链去查武器表：链在开火那一刻已经把 {@code w} 丢了，
+         * 而"这一代是哪把枪"必须与伤害/暴击同一份冻结值。
+         *
+         * <p>⚠ 这一格**取代**了原先的 {@code boolean guided}。第三条流（光束）落地时那个布尔正好漏掉：
+         * 它与"这一把是什么形态"差集为空，两个字段回答同一个问题就是两个真源。现在读它的是
+         * {@link BulletChain#step} 里那**一处** switch（全项目按形态分流的地点只有那一个）。
          */
-        public boolean guided;
+        public int school;
 
         void set(Template o) {
             speedPx = o.speedPx;
@@ -81,7 +92,7 @@ public final class WeaponFire {
             color = o.color;
             weaponId = o.weaponId;
             crit = o.crit;
-            guided = o.guided;
+            school = o.school;
         }
     }
 
@@ -110,7 +121,7 @@ public final class WeaponFire {
         out.color = w.color;
         out.weaponId = w.id;
         out.crit = crit;
-        out.guided = w.guided;
+        out.school = w.school;
     }
 
     /**
@@ -163,6 +174,30 @@ public final class WeaponFire {
         m.color = t.color;
         m.weaponId = t.weaponId;
         return m;
+    }
+
+    /**
+     * 出膛一道**光束**（激光体系走这条）。与 {@link #fireOne}／{@link #fireMissile} 同一条模板、
+     * 同一个"永不拒发"的约定，差别在**它不飞**：
+     *
+     * <ul>
+     *   <li>不写 {@code vx/vy}，也不读 {@code speedPx}——束的长度是**屏幕**给的（机头到战场顶边），
+     *       所以这里连"飞多久"这个概念都没有。这正是他点丙时那句「打的不是子弹」的字面兑现。</li>
+     *   <li>不读 {@code maxLife}（那是普通弹的过屏寿命）。束的时长读
+     *       {@link Balance.Beam#lifeSec}：它是画面残亮，不是飞行预算。</li>
+     *   <li>不接受 {@code deg}。激光那一格恒 {@code pellets == 1} 且 {@code spreadDeg == 0}
+     *       ⇒ 这一道只能是竖直的，把角度参数摆在这儿只会让人以为光束会斜着打
+     *       （判据见 {@link BeamRules#hits}，那条前提由 {@code BeamTest} 钉着）。</li>
+     * </ul>
+     *
+     * <p>⚠ 这里**不结算伤害**。结算排在同一步的 {@code collide} 里，因为那才是网格与敌表
+     * 都是**本步新值**的位置——{@code rebuildGrid} 就在 {@code collide} 开头。在出膛这一刻打
+     * 上一帧的快照，等于漏掉本步刚挪进来的那一只（同一条教训见 {@code Game.settleImpact} 的自述）。
+     *
+     * @param x,y 出膛那一刻的机头位置；{@code y} 是束的**下端**
+     */
+    public static Beams.Beam fireBeam(Beams pool, Template t, float x, float y) {
+        return pool.spawn(x, y, t.size, t.damage, t.color, t.weaponId, t.crit, Balance.beam.lifeSec);
     }
 
     /**

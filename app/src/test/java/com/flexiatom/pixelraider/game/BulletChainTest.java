@@ -236,7 +236,7 @@ public class BulletChainTest {
         c.beginGeneration(template(Balance.weapons[Balance.Weapon.PULSE]));
         int made = 0;
         for (int step = 0; step < 20 && c.remaining() > 0; step++) {
-            made += c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null);
+            made += c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null, null);
         }
         assertEquals(4, made);
         for (int i = 0; i < pool.activeCount(); i++) {
@@ -397,7 +397,7 @@ public class BulletChainTest {
         c.layout(synthetic(33), 5, PERIOD);
         c.beginGeneration(template(Balance.weapons[Balance.Weapon.PULSE]));
         BulletPool pool = new BulletPool(16);
-        assertEquals(0, c.step(0f, NOSE_X, NOSE_Y, pool, null));
+        assertEquals(0, c.step(0f, NOSE_X, NOSE_Y, pool, null, null));
         assertEquals(c.slots(), c.remaining());
         assertEquals(0, pool.activeCount());
     }
@@ -411,7 +411,7 @@ public class BulletChainTest {
         BulletPool pool = new BulletPool(16);
         assertEquals(5, drain(c, pool));
         assertEquals(0, c.remaining());
-        for (int i = 0; i < 600; i++) assertEquals(0, c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null));
+        for (int i = 0; i < 600; i++) assertEquals(0, c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null, null));
     }
 
     /** clear 之后这一代剩下的时隙作废，但**已出膛的弹**不归链管（它们在池里继续飞）。 */
@@ -425,7 +425,7 @@ public class BulletChainTest {
         assertTrue("前提：这一代还没排完", c.remaining() > 0);
         c.clear();
         assertEquals(0, c.remaining());
-        assertEquals("清完就该一帧都不发", 0, c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null));
+        assertEquals("清完就该一帧都不发", 0, c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null, null));
         assertEquals(8, pool.activeCount());
     }
 
@@ -449,7 +449,7 @@ public class BulletChainTest {
             // 那次乘法可能差几个 ulp，到点因此可能晚一步。多喂的几步用的还是同一个
             // noses[slot] ⇒ 出膛点不变，断言不受影响。
             for (int f = 0; f < 20 && pool.activeCount() == seen; f++) {
-                c.step(Time.STEP, noses[slot], NOSE_Y, pool, null);
+                c.step(Time.STEP, noses[slot], NOSE_Y, pool, null, null);
             }
             int made = pool.activeCount() - seen;
             assertTrue("第 " + slot + " 档没发出来", made > 0);
@@ -489,7 +489,7 @@ public class BulletChainTest {
         float outerVx = 0f;
         for (int slot = 0; slot < c.slots(); slot++) {
             for (int f = 0; f < 20 && pool.activeCount() == seen; f++) {
-                c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null);
+                c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null, null);
             }
             int made = pool.activeCount() - seen;
             assertEquals("第 " + slot + " 档的发数", c.pelletsAt(slot), made);
@@ -741,7 +741,7 @@ public class BulletChainTest {
         int volleys = 0;
         int sinceStart = 0;
         for (int step = 0; step < 60 * 30; step++) {
-            sinceStart += c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null);   // 先推进链
+            sinceStart += c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null, null);   // 先推进链
             pool.stepAndCompact(Time.STEP, SCREEN_W, SCREEN_H, MARGIN);
             timer -= Time.STEP;
             if (timer <= 0f) {                                       // player.canFire() 的等价判据
@@ -770,7 +770,7 @@ public class BulletChainTest {
      * {@link #adjacentColumnsLeaveExactlyOneBulletWidthOfAir} 与
      * {@link #subStepIntervalBecomesExactlyOneStepPerSlot} 接手，这里继续守纵向那一半。
      *
-     * <p>**制导武器不在这条里**：弹链的间距**由飞行拉开**——出膛点都在机头，两发的距离差完全等于
+     * <p>**只有子弹体系在这条里**：弹链的间距**由飞行拉开**——出膛点都在机头，两发的距离差完全等于
      * "前一双多飞了 {@code interval} 那么久"。匀速弹成立，因为 {@code interval·bulletSpeed ≥ len}
      * 就是这条的几何式（{@link #quantizationAlwaysRoundsUpToAWholeStep} 全表覆盖）；导弹会推力与
      * 滑行减速，速度**不再是** {@code bulletSpeed}，滑行段的速度只剩 120~133px/s 时间距掉到
@@ -783,7 +783,7 @@ public class BulletChainTest {
     public void everyWeaponSpacesItsChainByAtLeastOneBulletLength() {
         BulletPool pool = new BulletPool(Balance.bullet.capacity);
         for (Balance.Weapon w : Balance.weapons) {
-            if (w.guided) continue;
+            if (w.school != Balance.Weapon.SCHOOL_BULLET) continue;
             for (int n = 1; n <= 8; n++) {
                 pool.clear();
                 BulletChain c = new BulletChain();
@@ -808,23 +808,26 @@ public class BulletChainTest {
      * 制导代漏传池 = **接线错误**，不是"这一代恰好不发弹"：当场抛，而且抛在推进链**之前**，
      * 所以修好接线之后同一代照样发满。
      *
-     * <p>这条判据存在的理由是"静默少发在账本上看不出来"：{@code step} 的返回值是两条分支的合计，
+     * <p>这条判据存在的理由是"静默少发在账本上看不出来"：{@code step} 的返回值是三条分支的合计，
      * 调用方拿它去记 {@code stats.addShots}。要是在这里安静地返回 0，那一代的发数就从
      * 出膛账上蒸发了，而 {@code shotsHit} 一侧还可能照样记命中——最终被 {@code Rating.clamp01}
      * 钳成"命中率 100%"，全链路没有任何地方会红（复核 DA-6 的正是这条）。
+     *
+     * <p>光束代漏传池那条在 {@link BeamTest}，与它的另外四条读数放在一起。
      */
     @Test
     public void aGuidedGenerationWithoutAPoolFailsLoudly() {
         Balance.Weapon missile = Balance.weapons[Balance.Weapon.MISSILE];
         WeaponFire.Template t = template(missile);
-        assertTrue("前提：这把枪得走制导分支，否则这条测的是别的东西", t.guided);
+        assertTrue("前提：这把枪得走制导分支，否则这条测的是别的东西",
+                t.school == Balance.Weapon.SCHOOL_MISSILE);
         BulletChain c = new BulletChain();
         c.layout(missile, missile.pellets, missile.fireGap);
         c.beginGeneration(t);
         int slotsLeft = c.remaining();
         BulletPool shots = new BulletPool(16);
         try {
-            c.step(Time.STEP, NOSE_X, NOSE_Y, shots, null);
+            c.step(Time.STEP, NOSE_X, NOSE_Y, shots, null, null);
             throw new AssertionError("制导代缺 Missiles 池应该抛，而不是返回 0 发");
         } catch (IllegalStateException expected) {
             assertTrue(expected.getMessage(), expected.getMessage().contains("no Missiles pool"));
@@ -836,7 +839,7 @@ public class BulletChainTest {
         int made = 0;
         int guard = 0;
         while (c.remaining() > 0) {
-            made += c.step(Time.STEP, NOSE_X, NOSE_Y, shots, missiles);
+            made += c.step(Time.STEP, NOSE_X, NOSE_Y, shots, missiles, null);
             assertTrue("补上池之后这一代排不完", ++guard < 10_000);
         }
         assertEquals("修好接线之后同一代仍该发满 N 发", missile.pellets, made);
@@ -855,15 +858,15 @@ public class BulletChainTest {
     /**
      * 喂时间到这一代排完，返回实发数。步长恒为固定步长，帧顺序与 {@code Game.step} 一致。
      *
-     * <p>{@code missiles} 恒传 null：这条helper 服务的用例全是匀速弹（见
-     * {@link #everyWeaponSpacesItsChainByAtLeastOneBulletLength} 里"制导武器不在其中"的理由），
-     * 而 {@link BulletChain#step} 遇到制导模板缺池会当场抛——那个分支本身就是"漏传池"的钉子。
+     * <p>{@code missiles}/{@code beams} 恒传 null：这条helper 服务的用例全是匀速弹（见
+     * {@link #everyWeaponSpacesItsChainByAtLeastOneBulletLength} 里"只有子弹体系在其中"的理由），
+     * 而 {@link BulletChain#step} 遇到非子弹体系的模板缺池会当场抛——那个分支本身就是"漏传池"的钉子。
      */
     private static int drain(BulletChain c, BulletPool pool) {
         int made = 0;
         int guard = 0;
         while (c.remaining() > 0) {
-            made += c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null);
+            made += c.step(Time.STEP, NOSE_X, NOSE_Y, pool, null, null);
             pool.stepAndCompact(Time.STEP, SCREEN_W, SCREEN_H, MARGIN);
             assertTrue("一代排不完（" + guard + " 步）：C·interval 的账或排放循环的条件错了",
                     ++guard < 10_000);
@@ -875,7 +878,7 @@ public class BulletChainTest {
     private static int emitOne(BulletChain c, BulletPool pool, float noseX) {
         int made = 0;
         for (int f = 0; made == 0 && f < 100; f++) {
-            made = c.step(Time.STEP, noseX, NOSE_Y, pool, null);
+            made = c.step(Time.STEP, noseX, NOSE_Y, pool, null, null);
         }
         assertTrue("等不到任何一发排出来", made > 0);
         return made;

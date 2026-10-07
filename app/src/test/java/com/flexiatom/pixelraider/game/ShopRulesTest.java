@@ -1145,17 +1145,17 @@ public class ShopRulesTest {
      *
      * <p>这条是他 2026-10-02 报的病因直接换来的（「实测格斗导弹购买后无效果，或者说应该是从子弹
      * 切换到导弹（或激光）的一套都没做」）。报之前 508 条测试全绿，因为每一层单独看都自洽：
-     * {@code Balance.weapons} 里导弹那一格在、{@code BulletChain} 会按 {@code guided} 分流、
+     * {@code Balance.weapons} 里导弹那一格在、{@code BulletChain} 会按 {@code school} 分流、
      * 导弹仿真会飞——可 {@code MISSILE} 这一把<b>当时从来没有获取途径</b>（唯一入口是物理键盘 1..6，
      * 触屏没有切枪面），于是 {@code Game} 里那条**当时的**闸门 {@code dogfightOn() && guided}
      * 在读表上恒假。缺的正是"输入面 → 武器表"这一跳，所以要写成一条断言，而不是等他再实测一次。
-     * （今天那条闸门是 {@code dogfightOn() && (guided || debugPulseDogfight)}，后半那枚只是调试包的
+     * （今天那条闸门是 {@code dogfightOn() && (手持导弹体系 || debugPulseDogfight)}，后半那枚只是调试包的
      * 观测口；这条用例钉的仍是**正常玩法**那半边，与它无关。）
      *
      * <p>三段各钉一层，中间那个 {@code ShopRun.nextSchoolWeapon} 就是**体系键**按下时 {@code Game}
      * 调的那一个函数：① 两张解锁卡都没买时，体系键根本不该出现（{@code schoolKeyLive} 为假），
      * 就算强行按也<b>永远</b>走不到导弹与激光；② 买了「基础导弹」之后从脉冲起步、有限次点击必达导弹；
-     * ③ 落到的那一格 {@code guided} 必须为真——否则③之前那两层全对也仍然是"买了没效果"。
+     * ③ 落到的那一格必须是**导弹体系**——否则③之前那两层全对也仍然是"买了没效果"。
      */
     @Test
     public void touchInputReachesTheGuidedWeaponOnlyAfterTheUnlockCard() {
@@ -1191,9 +1191,9 @@ public class ShopRulesTest {
         }
         assertEquals("按了 " + steps + " 次体系键还没到导弹这一把", Balance.Weapon.MISSILE, cur);
         assertTrue("落到的那一把不是制导弹：切到了也没走导弹那条仿真池",
-                Balance.weapons[cur].guided);
-        assertEquals("guided 只该在导弹这一格为真（第二把制导武器要改的是分流判据，不是加一格）",
-                1, guidedCount());
+                Balance.weapons[cur].school == Balance.Weapon.SCHOOL_MISSILE);
+        assertEquals("导弹体系只该有导弹这一把枪（第二把制导武器要改的是分流判据，不是加一格）",
+                1, missileSchoolCount());
     }
 
     /**
@@ -1284,9 +1284,16 @@ public class ShopRulesTest {
         return new PlayerState().lastGunOfSchool;
     }
 
-    private static int guidedCount() {
+    /**
+     * 走导弹那一族的枪有几把。取代原先数 {@code Weapon.guided} 那一条：布尔与"这一把是什么形态"
+     * 差集为空，光束落地那天它正好漏掉（提案 laser-weapon-form §8），所以分流判据现在只剩
+     * {@code school} 一个真源，这条数的是它的直读。
+     */
+    private static int missileSchoolCount() {
         int n = 0;
-        for (Balance.Weapon w : Balance.weapons) if (w.guided) n++;
+        for (Balance.Weapon w : Balance.weapons) {
+            if (w.school == Balance.Weapon.SCHOOL_MISSILE) n++;
+        }
         return n;
     }
 

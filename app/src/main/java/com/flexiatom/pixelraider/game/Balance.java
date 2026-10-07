@@ -46,6 +46,7 @@ public final class Balance {
     public static final Shield shield = new Shield();
     public static final Bullet bullet = new Bullet();
     public static final Missile missile = new Missile();
+    public static final Beam beam = new Beam();
     public static final Drop drop = new Drop();
     public static final Status status = new Status();
     public static final Wingman wingman = new Wingman();
@@ -248,6 +249,50 @@ public final class Balance {
         public float bossSize = 4f;
         /** [可调] 敌弹命中判定在玩家半径外的补偿：决定"擦边算不算中"。 */
         public float hostileHitPad = 2f;
+    }
+
+    /**
+     * 光束表（丙：独立光束池，他 2026-10-07 逐字裁「激光取<b>丙</b>（独立光束池）」，见池件
+     * {@code laser-weapon-form}）。
+     *
+     * <p>这一本表**只有两个数是真的**（{@link #lifeSec} 与 {@link #hitPad}），因为形态本身就是
+     * "按 {@code fireGap} 节拍打出一道瞬时光束"：
+     * <ul>
+     *   <li><b>没有弹速、没有弹长</b>——束从机头拉到战场顶边，长度由屏幕给，不由数值表给。
+     *       所以 {@code Weapon.bulletSpeed} 与 {@code drawLenRatioY} 在激光那一格上不再决定画面。</li>
+     *   <li><b>伤害不在这张表上</b>——它读 {@code Weapon.damage} 与局内火力卡的固定加点，
+     *       与直飞弹同一条 {@code WeaponFire.fillTemplate}；暴击也同一条（一代一束，束内共享判定）。
+     *       在这里再开一个 DPS 字段就是第二个真源。</li>
+     *   <li><b>节拍不在这张表上</b>——它是 {@code Weapon.fireGap ÷ 射速乘子}，走 {@code PlayerState}
+     *       的冷却。这条是刻意的：射速卡若在激光上买不出差别，那张卡就成了假商品
+     *       （自家判据见 {@code ShopRules} 那句"卖一件场上不存在的机制就是假商品"）。</li>
+     * </ul>
+     */
+    public static final class Beam {
+        /**
+         * [可调] 一道光束在屏幕上**亮多久**（秒）。
+         *
+         * <p>它是纯画面时长：伤害在出膛那一步就已经结完了（瞬时），束亮着的时候不再打人。
+         * 真 hitscan 的问题是玩家看不见弹道、无法判断"我打没打中那条线"，所以留一段残亮
+         * 让"一道"读得出来。上界由并发算：{@code lifeSec ÷ (fireGap ÷ 射速乘子上界 1.62)}
+         * = 0.1 ÷ 0.0556 = 1.8 ⇒ 同屏最多两道，不会糊成一片。
+         */
+        public float lifeSec = 0.1f;
+        /**
+         * [可调] 命中判据在**束宽之外**各放的余量（逻辑像素）。
+         *
+         * <p>与 {@link Bullet#hostileHitPad} 同语义（"擦边算不算中"），而且**各向同性**：判据是
+         * 线段 ⊕ 半径 {@code size/2 + hitPad} 的胶囊，四边都松这一格。真正把"打得比画得长"挡住
+         * 的不是这一格，是 {@code BeamRules.hits} 里那两次 **clamp**——它让束只有画出来的那一段
+         * （顶边到机头），不打战场顶边之上那些"还没进场"的敌人。
+         */
+        public float hitPad = 1f;
+        /**
+         * [可调] 光束池容量。**不是玩法上限，是画面预算**：出膛那一步就结算完了，池满只会
+         * 覆盖最老的那一道（{@code Beams} 是环形槽，没有"拒发"这条路）。
+         * 同屏峰值 1.8 道（见 {@link #lifeSec} 那条算式），取 4 留一倍余量。
+         */
+        public int capacity = 4;
     }
 
     /**
@@ -994,7 +1039,7 @@ public final class Balance {
          * **获取途径**那一半：{@link Balance#weapons} 里那六把**当时**从来没有哪一处卖过，触屏又没有
          * 切枪入口，于是 {@code Game} 里那条**当时的**闸门 {@code dogfightOn() && guided}
          * 在读表上恒假，「格斗导弹」买下去场上纹丝不动（他实测报的正是这条）。
-         * 今天那条闸门是 {@code dogfightOn() && (guided || debugPulseDogfight)}：后半那枚是**调试包**
+         * 今天那条闸门是 {@code dogfightOn() && (手持导弹体系 || debugPulseDogfight)}：后半那枚是**调试包**
          * 专用的观测口（让脉冲枪也能逼出格斗弹好目视确认，入口在暂停页的调试格），不是第三条获取
          * 途径——别把它读成"制导那把终于能买了"，能买靠的是上面这两张卡。
          */
@@ -1271,7 +1316,8 @@ public final class Balance {
                         // 四级的量。价格这一格在第二轮之后**没有重算**：他改的是量、不是档数，
                         // 而这条幅度仍落得下（如实登记：这不是重新对过账的结论）。
                         // tip 这次改写保留他 2026-10-03 裁的那半条（发射闸门要求**手持**制导那把，
-                        // {@code Game.stepMissiles} 里那条 `player.weapon().guided`），前提两个字都不丢：
+                        // {@code Game.stepMissiles} 里那条 {@code player.weapon().school == SCHOOL_MISSILE}），
+                        // 前提两个字都不丢：
                         // 旧句「切到导弹枪，近处敌机自动发射」14 字里"近处敌机"那半是可以在 desc 里说的
                         // 细节，而"二级"这半**只有卡面能承担**（Lv 角标只说涨、不说涨什么）。
                         // 15 字是卡面文字列 181px 的上限（{@code ShopLayoutTest
@@ -1531,35 +1577,34 @@ public final class Balance {
          * 两个读者共读这一个数：{@code Game.drawShots}（画多长）与 {@code BulletChain.layout}
          * （走完一个弹长要多久 = 弹链的时隙间隔）。分开的后果是"链的相切判据"与"画面上的断档"
          * 各说各话——玩家看到两发叠在一起，而算术说它们正好首尾相接。敌弹不读它（画 size 的正方形）。
+         *
+         * <p>⚠ **第三条流不读它**：光束（{@link Weapon#SCHOOL_LASER}）的长度是**屏幕**给的——
+         * 从机头拉到战场顶边，画多长与打多长同一条线（见 {@code BeamRules}）。激光那一格留着这个数
+         * 只为喂弹链的时隙，理由写在那一行上。
          */
         public float drawLenRatioY = 1.7f;
         /**
-         * [形态] true = 这一把的弹丸走**独立仿真池**（{@link Balance#missile}），不进 {@code shots} 池。
-         * 唯一读者是 {@code BulletChain.step} 的那个分支——全项目只此一处按武器分流，
-         * 所以它必须是布尔而不是"看 shape"或"看 id"：后者会在第二把制导武器出现时悄悄漏掉。
-         * 为什么不能塞进普通弹池：普通弹一进命中循环就 {@code killAt}（命中即消失），
-         * 而仿真体要活过引信、自爆、战斗部三个阶段。
-         */
-        public boolean guided;
-        /**
-         * [归属] 这一把属于哪一个**体系**——底部那枚体系键的分组依据（{@code ShopRun} 的两条循环各自读它）。
+         * [归属·分流] 这一把属于哪一个**体系**，同时是**出膛走哪张池**的判据。
          *
-         * <p>这个词不是新造的。他 2026-09-26 逐字「成长树我打算分几个流派，目前暂定"<b>子弹</b>"、
-         * "<b>激光</b>"、"<b>导弹</b>"几个大类，下面后续会设计小类」（见
-         * {@code growth-tree-schools-pause-shop} 的 I-1），2026-10-07 又用同一个三分法给了切枪的形状：
-         * 「<b>体系键</b>（子弹／激光／导弹）＋<b>模式键</b>（族内换枪）」（见 {@code weapon-system-vs-mode-switch}）。
+         * <p>作为切枪的分组：它是底部那枚体系键的依据（{@code ShopRun} 的两条循环各自读它）。这个词不是
+         * 新造的。他 2026-09-26 逐字「成长树我打算分几个流派，目前暂定"<b>子弹</b>"、"<b>激光</b>"、
+         * "<b>导弹</b>"几个大类，下面后续会设计小类」（见 {@code growth-tree-schools-pause-shop} 的 I-1），
+         * 2026-10-07 又用同一个三分法给了切枪的形状：「<b>体系键</b>（子弹／激光／导弹）＋
+         * <b>模式键</b>（族内换枪）」（见 {@code weapon-system-vs-mode-switch}）。
          * 所以这一格同时是**切枪的分组**与将来**成长树分家的同一份答案**——两处各写一张表，
          * 迟早会变成"按体系涨价"与"按体系换枪"指向不同的枪。
          *
-         * <p>归类按**物理形态**而不是按名字的字面：子弹 = {脉冲, 散射, 电弧, 回旋}（全都走 {@code shots} 池、
-         * 直飞、命中即消失），激光 = {激光}，导弹 = {导弹}。⚠ 「电弧」两个字听着像能量侧，但它今天的实现
-         * 就是一枚弹（{@code pellets=1}、直飞、{@code guided=false}），所以它留在子弹这一族——
+         * <p>作为分流判据：三张池各归一个体系——{@code shots}（直飞弹丸）／{@code beams}（瞬时光束）／
+         * {@code missiles}（独立仿真池）。归类按**物理形态**而不是按名字的字面：子弹 =
+         * {脉冲, 散射, 电弧, 回旋}，激光 = {激光}，导弹 = {导弹}。⚠ 「电弧」两个字听着像能量侧，但它今天的
+         * 实现就是一枚弹（{@code pellets=1}、直飞、命中即消失），所以它留在子弹这一族——
          * <b>这一格记的是场上真存在的东西，不是名字给人的直觉</b>。他若哪天把电弧做成链式放电（规格 §三
          * 那句「链式分叉闪电」本来就是这么描述它的），那一格跟着挪，本条归类要重读。
          *
-         * <p>⚠ 它与 {@link #guided} 今天回答的是**两个问题**（归属 vs 走哪个弹池），所以两个字段并存不算重复；
-         * 但它们的差集目前为空。第三形态（光束）落地那天，分流判据要收到这一格上来，
-         * {@link #guided} 那条「必须是布尔」的理由随之改写——它防的正是"第二把制导武器悄悄漏掉"。
+         * <p>⚠ 它**取代**了原先那个 {@code Weapon.guided} 布尔。旧字段防的是"第二把制导武器悄悄漏掉"，
+         * 而第三形态（光束）落地时它正好漏掉：{@code guided} 与"这一把是什么形态"差集为空，
+         * 两个字段回答同一个问题就是两个真源。现在的形状是**一次 switch 三条流**
+         * （{@code BulletChain.step}），加第四个体系时编译器与那条 switch 都会逼人来看一眼。
          */
         public final int school;
 
@@ -1593,7 +1638,13 @@ public final class Balance {
             a[LASER].fireGap = 0.09f; a[LASER].damage = 1; a[LASER].critPercent = 4;
             a[LASER].pellets = 1; a[LASER].bulletSpeed = 620f;
             a[LASER].color = 0xFFEFD9FF; a[LASER].size = 2f;
-            // 激光是"长刃"形态：唯一一把绘制长度不是 1.7 倍的武器，画出来才是那道束。
+            // 激光是**光束**形态（他 2026-10-07 逐字裁「激光取丙（独立光束池）」，见 laser-weapon-form）：
+            // 出膛不飞弹丸，而是当场打出一道竖束，对沿途每架各结一次伤。
+            // ⚠ 因此 bulletSpeed / drawLenRatioY 这两个数在这一把上**只剩一个读者**：弹链的时隙
+            // （{@code BulletChain.layout} 用 弹长÷弹速 算 interval）。这一行 pellets 恒 1 ⇒
+            // 一代只有一个时隙 ⇒ 那两个数**观察不到**（既不决定画面，也不决定节奏，节奏是 fireGap）。
+            // 留着而不是清零：清零会让 layout 除出 0 或 NaN，那才是真会把人绕进去的错。
+            // 激光的形态就是那一条线：size 是束宽（2 逻辑像素），命中另有 hitPad（见 Balance.Beam）。
             a[LASER].drawLenRatioY = 3.4f;
 
             a[SHOT] = new Weapon(SHOT, "散射", 2, SCHOOL_BULLET);
@@ -1605,7 +1656,8 @@ public final class Balance {
             a[MISSILE].fireGap = 0.46f; a[MISSILE].damage = 6; a[MISSILE].critPercent = 12;
             a[MISSILE].pellets = 2; a[MISSILE].bulletSpeed = 220f;
             a[MISSILE].color = 0xFFFF5C7A; a[MISSILE].size = 4f; a[MISSILE].spreadDeg = 26f;
-            a[MISSILE].guided = true;           // 走 missile-warhead-sim 的独立仿真池
+            // 走哪张池由构造期那第四格 school 决定（SCHOOL_MISSILE ⇒ 独立仿真池，missile-warhead-sim），
+            // 不再有第二个"形态"字段。
 
             a[ARC] = new Weapon(ARC, "电弧", 5, SCHOOL_BULLET);
             a[ARC].fireGap = 0.26f; a[ARC].damage = 4; a[ARC].critPercent = 15;

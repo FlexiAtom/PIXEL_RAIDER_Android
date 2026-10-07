@@ -93,6 +93,13 @@ import com.flexiatom.pixelraider.core.Time;
  * 整代一步打完（纯横向）；{@code N > C·COLUMN_CAP} 才需要更多列来分摊时间。激光恒 {@code N=1}
  * ⇒ 恒单列（它不吃扳机，见下）。
  *
+ * ⚠ 但**链对激光只管节奏，不管形态**：激光那一代排出的那一个时隙走的是第三条流
+ * （{@code Beams}，一道瞬时光束，见 {@link WeaponFire#fireBeam}），落进普通弹池才是
+ * "打的不是激光"那个 bug 的本体。所以 {@code C} 那一行给激光的 5 已经没有意义了——
+ * {@code N=1} ⇒ {@code used=1} ⇒ 弹速与弹长在这一把上不决定任何**观察得到**的东西，
+ * 周期 {@code fireGap ÷ 射速乘子} 才是它唯一的节拍（这一条是刻意的：射速卡若在激光上
+ * 买不出差别，那张卡就是假商品）。
+ *
  * 周期取**有效冷却**（{@code fireGap / 射速乘子}），不是基础 fireGap。这一条同样是让"相切"成立的
  * 关键：乘子大 ⇒ 周期短 ⇒ C 小 ⇒ 列数多（前面变宽），而不是同列两发糊成一条实线；乘子小
  * （迟滞/寒潮）⇒ 周期长 ⇒ 一代弹链摊得更开。而 {@code interval} 只由弹长与弹速决定，不吃乘子
@@ -313,26 +320,40 @@ public final class BulletChain {
      * 喂进来的正是 {@code Time.STEP}（定格时更少），**一步最多冒一个时隙**——这正是"相邻两发不重叠"
      * 的另一半保证。留 {@code while} 而不写 {@code if}：它同时是"步长将来改了也不会丢发"的兜底。
      *
-     * <p>两张池按 {@link WeaponFire.Template#guided} 分流，**全项目只有这一处**按制导与否分叉：
-     * 制导弹进 {@link Missiles}（之后由 {@link MissileBehavior} 逐步导引），其余进
-     * {@link BulletPool}（定死直飞）。分叉读的是代模板而不是武器表——链在开火那一刻已经把
-     * {@code w} 丢了，而"这一代是哪把枪"必须与伤害/暴击同一份冻结值。
+     * <p>三张池按 {@link WeaponFire.Template#school} 分流，**全项目只有这一处**按形态分叉：
+     * 导弹进 {@link Missiles}（之后由 {@link MissileBehavior} 逐步导引），激光进 {@link Beams}
+     * （瞬时、不飞，见 {@link WeaponFire#fireBeam}），其余进 {@link BulletPool}（定死直飞）。
+     * 分叉读的是代模板而不是武器表——链在开火那一刻已经把 {@code w} 丢了，而"这一代是哪把枪"
+     * 必须与伤害/暴击同一份冻结值。
      *
-     * <p>返回值是**两条分支的合计**，所以调用方的出膛记账（{@code stats.addShots}）只需一处。
+     * <p>⚠ 这里是**一次 switch 而不是两枚布尔**，那条形状是有来历的：先前它是
+     * {@code if (tpl.guided) … else …}，第三条流落地时那个布尔会**静默走错池**——激光的
+     * {@code guided} 为假 ⇒ 落进 {@link BulletPool}，屏幕上照样有东西飞出去、听着也对，
+     * 只有"它不是激光"这一件事没人报。这正是他 2026-10-07 那句「甚至是打的子弹而不是激光」在代码里的
+     * 病因。所以判据收在 {@code school} 这一格上：**加第四个体系时，这一处的 default 分支就是那面墙**。
+     *
+     * <p>返回值是**三条分支的合计**，所以调用方的出膛记账（{@code stats.addShots}）只需一处。
      * 这不是省事：fired 必须是所有可能被记 hit 的实体的父集，分两处记就有漏一处的那条路，
      * 而漏掉导弹侧的后果是 {@code shotsHit > shotsFired} 被 {@code Rating.clamp01} 静默钳成
-     * "命中率 100%"——全链路没有任何地方会红。
+     * "命中率 100%"——全链路没有任何地方会红。光束侧同一条：一束光最多记**一个** hit
+     * （哪怕它穿了三架），否则 {@code accuracy} 在激光上直接爆表。
      *
      * @param noseX,noseY 机头位置——**每帧重读**，所以边移动边开火时链是弯的
-     * @param missiles    制导弹池；本代没有制导弹时允许为 null
+     * @param missiles    制导弹池；本代不是导弹时允许为 null
+     * @param beams       光束池；本代不是光束时允许为 null
      * @return 这一帧实际出膛的发数（0 是常态：大多数帧根本没有时隙到点）
-     * @throws IllegalStateException 这一代是制导弹但没给池——那是接线错误，不是"这一代不发弹"
+     * @throws IllegalStateException 这一代要走某张池但没给那张池——那是接线错误，不是"这一代不发弹"
      */
-    public int step(float dt, float noseX, float noseY, BulletPool pool, Missiles missiles) {
+    public int step(float dt, float noseX, float noseY, BulletPool pool, Missiles missiles,
+                    Beams beams) {
         if (next >= slots) return 0;
-        if (tpl.guided && missiles == null) {
-            throw new IllegalStateException("guided generation weaponId=" + tpl.weaponId
+        if (tpl.school == Balance.Weapon.SCHOOL_MISSILE && missiles == null) {
+            throw new IllegalStateException("missile generation weaponId=" + tpl.weaponId
                     + " but no Missiles pool was given");
+        }
+        if (tpl.school == Balance.Weapon.SCHOOL_LASER && beams == null) {
+            throw new IllegalStateException("beam generation weaponId=" + tpl.weaponId
+                    + " but no Beams pool was given");
         }
         acc += dt;
         int made = 0;
@@ -345,8 +366,17 @@ public final class BulletChain {
                 int col = start + i;
                 float x = noseX + colOffset[col];
                 float deg = colAngle[col];
-                if (tpl.guided) WeaponFire.fireMissile(missiles, tpl, x, noseY, deg);
-                else WeaponFire.fireOne(pool, tpl, x, noseY, deg);
+                switch (tpl.school) {
+                    case Balance.Weapon.SCHOOL_MISSILE:
+                        WeaponFire.fireMissile(missiles, tpl, x, noseY, deg);
+                        break;
+                    case Balance.Weapon.SCHOOL_LASER:
+                        // 不传 deg：束恒竖直（前提由 BeamTest 钉在武器表那一行上）
+                        WeaponFire.fireBeam(beams, tpl, x, noseY);
+                        break;
+                    default:
+                        WeaponFire.fireOne(pool, tpl, x, noseY, deg);
+                }
                 made++;
             }
         }

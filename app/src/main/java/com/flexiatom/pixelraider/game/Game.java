@@ -166,6 +166,14 @@ public final class Game implements GameThread.Host {
      */
     private final Missiles missiles = new Missiles(Balance.missile.capacity);
     /**
+     * 光束池（第三条流）。**不与 {@link #shots} 共用**，理由与 {@link #missiles} 那两条同形且更硬：
+     * 光束没有速度、没有寿命积分、命中即结完（{@link Beams} 类头三条差别）。把它塞进弹池，
+     * 就得给那张 14 字段的结构加"不可回收、不积分"两种例外——为一个分支污染整张表。
+     * <p>⚠ 它是**画面**的容器：伤害在 {@link #collide} 里结，结完那一格亮着继续存在只是因为
+     * 玩家要看得见"我打的是束不是弹"。
+     */
+    private final Beams beams = new Beams(Balance.beam.capacity);
+    /**
      * 战斗部池（连续杆亮线 + 它破碎后的碎片）。第二个实参**只为断言** {@code Warhead.contact}
      * 那个位图装得下敌槽号，所以它必须与 {@link #enemies} 同源，不许写第二份字面量。
      */
@@ -1494,13 +1502,13 @@ public final class Game implements GameThread.Host {
      * 那最后一步正好与"下一代就绪"撞在一起，先推进链才不会被 {@code beginGeneration} 抹掉末尾那一档。
      * 出膛点每帧重读机头，所以边移动边开火时链是弯的。
      *
-     * <p>{@code made} 是 **shots 与 missiles 两条分支的合计**（{@link BulletChain#step} 的口径），
+     * <p>{@code made} 是 **shots／missiles／beams 三条分支的合计**（{@link BulletChain#step} 的口径），
      * 所以这一处记账覆盖全部实发。只记 shots 侧的话 {@code shotsHit} 会大过 {@code shotsFired}，
      * 而 {@code RunStats.accuracy()} 只防除零不防反向、{@code Rating.clamp01} 与 {@code RunSummary}
      * 再钳两次 ⇒ 结算页安静地显示"命中率 100%"，全链路没有任何东西会红。
      */
     private void stepChain(float dt) {
-        int made = chain.step(dt, player.x, noseY(), shots, missiles);
+        int made = chain.step(dt, player.x, noseY(), shots, missiles, beams);
         // 记账挪到**实际出膛**处：计划发数与真的打进池里的发数从此不可能对不上。
         if (made > 0) {
             stats.addShots(made);
@@ -1566,7 +1574,8 @@ public final class Game implements GameThread.Host {
         stepPool(dogfightMissiles, dogfightBehavior, dt, MissileBehavior.NO_DESIGNATED);
         // 发射排在**本流全部 advance 之后**：tryLaunch 读的占用戳要包含"这一帧刚锁上的那些"，
         // 早一步就会朝同一只敌机在同一帧里出第二枚（判序写在 MissileBehavior#tryLaunch 的方法头）。
-        if (shopRun.dogfightOn() && (player.weapon().guided || debugPulseDogfight)) fireDogfight();
+        if (shopRun.dogfightOn() && (player.weapon().school == Balance.Weapon.SCHOOL_MISSILE
+                || debugPulseDogfight)) fireDogfight();
     }
 
     /**
@@ -1792,12 +1801,17 @@ public final class Game implements GameThread.Host {
     private void stepBullets(float dt) {
         shots.stepAndCompact(dt, Screen.LOGIC_W, metrics.logicH, MARGIN);
         hostile.stepAndCompact(dt, Screen.LOGIC_W, metrics.logicH, MARGIN);
+        // 光束不积分——它没有"往哪儿走"可算，只剩亮度衰减。排在 collide **之前**：
+        // 本步新出膛的那一束先衰减一格，随后在同一步里结算（{@link #playerBeamsAgainstEnemies}
+        // 的闸门是 {@code settled} 而不是 {@code life > 0}，所以这一格衰减不会让它跳过结算）。
+        beams.advance(dt);
     }
 
     private void collide(float dt) {
         rebuildGrid();
         stepWarheads(dt);
         playerShotsAgainstEnemies();
+        playerBeamsAgainstEnemies();
         hostileShotsAgainstPlayer();
         enemiesAgainstPlayer();
     }
@@ -1912,6 +1926,56 @@ public final class Game implements GameThread.Host {
             audio.play(AudioCues.ENEMY_HIT);
             if (hit.hp <= 0) killEnemy(hit, b.crit);
             shots.killAt(i);
+        }
+    }
+
+    /**
+     * 光束的结算：一道束 = 一次出膛、**沿途每架各结一次**、**一生只结这一次**。
+     *
+     * <p>排在 {@link #rebuildGrid} 之后是硬的（同 {@link #settleImpact} 那条教训）：出膛那一刻
+     * 网格还是上一帧的快照，用它在 {@code playerFire} 里打，会漏掉本步刚挪进来的那一只。
+     * 而"瞬时"这件事不靠这一步实现——靠的是**结一次就不再结**（{@link Beams.Beam#settled}）：
+     * 束亮着的后面几格只是画面，不再产生任何伤害。
+     *
+     * <p>⚠ 不走网格。网格的覆盖环是按**点**查询的尺寸出来的（{@link SpatialGrid#DEFAULT_MAX_CENTER_DISTANCE}
+     * = 40，见那个常量的自述），而一束光的纵向跨度是整条战场（300 上下），拿它查一次等于漏查；
+     * 换成一串采样点又要去重。这里两侧的量都不大——同屏最多两道（{@code Balance.beam.lifeSec} 那条算式），
+     * 敌人上界 {@code Balance.wave.maxAlive} + 2，全表扫一遍约 28 次比较，
+     * 而且**只在出膛那一格做**（其余各格直接跳过 settled 闸门）。网格在这条路上省不出可见的收益，
+     * 却会引进"覆盖界要跟着带变"的那笔账（{@code WarheadRules.sampleContact} 正挂着它）。
+     *
+     * <p>记账口径：**一束最多记一个 hit**。穿三架也只记一发命中、出膛记一发（{@code chain.step}
+     * 那侧的 {@code addShots}）。少这一条约束，{@code shotsHit} 就会大过 {@code shotsFired}，
+     * 被 {@code Rating.clamp01} 静默钳成"命中率 100%"——那条坑与它的后果都写在
+     * {@link BulletChain#step} 的方法头；导弹侧同一口径（{@link #detonateMissile} 的
+     * {@code countsAsHit} 是一枚一次）。
+     *
+     * <p>声音**一束一声**不按"穿了几架"响几声，与 {@code stepChain}／{@code settleContact}
+     * 那两处同一条理由：同时咬四只会放四声同样的 ENEMY_HIT，听着像炸豆。火花则是逐架的
+     * （画面上确实打了四下）。
+     */
+    private void playerBeamsAgainstEnemies() {
+        float top = metrics.battleTop();
+        for (int i = 0; i < beams.activeCount(); i++) {
+            Beams.Beam b = beams.at(i);
+            if (b.settled) continue;
+            b.settled = true;                     // 没打着也算结过：下一格不再结
+            boolean any = false;
+            int dmg = BeamRules.damageOf(b);
+            for (int j = 0; j < enemies.activeCount(); j++) {
+                Enemies.Enemy e = enemies.activeAt(j);
+                if (e.hp <= 0) continue;          // 判活用 hp<=0，与弹-敌那条同一个理由
+                if (!BeamRules.hits(b.x, top, b.y, b.width / 2f, Balance.beam.hitPad,
+                        e.x, e.y, e.radius)) continue;
+                any = true;
+                e.hp -= dmg;
+                e.hitFlash = 0.09f;
+                spawnSpark(e.x, e.y, b.color, b.crit);
+                if (e.hp <= 0) killEnemy(e, b.crit);   // 打死者必须走 killEnemy，否则无分数无掉落
+            }
+            if (!any) continue;
+            stats.addHit();
+            audio.play(AudioCues.ENEMY_HIT);
         }
     }
 
@@ -2214,12 +2278,13 @@ public final class Game implements GameThread.Host {
         // shopRun.reset() 与第一次开火都会让 matches() 自己判出来。把缓存也抹掉反而会让
         // "布局是不是清了"变成一个要额外验证的状态。
         chain.clear();
-        // 三张新池同样在这里归零。⚠ `clear()` 的形状是"只置游标与槽位表"，这一点是硬的：
+        // 四张新池同样在这里归零。⚠ `clear()` 的形状是"只置游标与槽位表"，这一点是硬的：
         // 本方法有一条调用链跑在 **UI 线程**上（MainActivity:138 → GameSurfaceView:44 → 本方法），
         // 与渲染线程并发。所以撕裂读的最坏后果必须是"多丢几枚导弹"，不能是"读到半个相位状态机"。
         missiles.clear();
         dogfightMissiles.clear();
         warheads.clear();
+        beams.clear();
         // 清池之后 {@link Missiles#evicted} 里躺的还是上一局那只弹，把比较基准推到当前计数，
         // 免得新一局的某次淘汰在上一局的旧坐标上撒一团自毁粒子（R22 之后它不展开杆，但坐标还是旧的）。
         // ⚠ 两条基准**各归各池**：evicted 是每个池自己的那一份副本，拿普通池的计数去比格斗池的
@@ -2416,6 +2481,7 @@ public final class Game implements GameThread.Host {
         drawMissiles(c);
         drawWarheads(c);
         drawShots(c, shots, false);
+        drawBeams(c);
         probe.end(FrameProbe.ENT);
         probe.begin(FrameProbe.FX);
         fx.drawAll(c);
@@ -2639,8 +2705,48 @@ public final class Game implements GameThread.Host {
     }
 
     /**
-     * 战斗部：连续杆画成**一条垂直弹轴的亮线**，碎片画成小方块。
+     * 光束：**一条从机头拉到战场顶边的竖条**，亮度按剩余生命衰减。它不是一条会走的弹，
+     * 屏幕上它就是"这一把正在打的东西"的全部署名——他 2026-10-07 那句「甚至是打的子弹而不是激光」
+     * 要修的正是这一格。
      *
+     * <p>两个端点各有出处：
+     * <ul>
+     *   <li><b>上端取 {@code metrics.battleTop()}</b>，与 {@link #playerBeamsAgainstEnemies}
+     *       传给 {@link BeamRules#hits} 的是**同一个读数**。分开的后果是本仓最常见的那一类错：
+     *       画到战场顶、却把还没进场的敌人也算打中（"打得比画得长"）。</li>
+     *   <li><b>下端取 {@code Beams.Beam.y}</b> = 出膛那一刻的机头 y，**不是**当前机头 y。
+     *       束亮着的那几格机头可能已经横移过去，束跟着走就变成"光柱拖着飞机跑"——
+     *       它记录的是那一次出膛，不是一根拴在机头上的棍子。</li>
+     * </ul>
+     *
+     * <p>画法是 {@code drawRect} 而不是 {@code drawLine}：与 {@link #drawShots} 同一条口径
+     * （整数逻辑网格上对齐，粗细由 {@code Beam.width} 说了算）。走 line 就要动 {@code stroke}
+     * 的粗细与抗锯齿，而那支 Paint 与 HUD 共用——改完不还原会把下一行边框变成三像素亮条
+     * （{@link #drawWarheads} 那条 ⚠ 说的就是这件事）。
+     *
+     * <p>白芯：**恒有一格**，暴击时加宽到 2。理由不是好看——纯色的 2 像素条在 12px 像素字体那套
+     * 视觉语言里读起来仍是"一根细线"，中间亮、两边淡才读得出"这是光束、它烫"。
+     */
+    private void drawBeams(Canvas c) {
+        float top = metrics.battleTop();
+        for (int i = 0; i < beams.activeCount(); i++) {
+            Beams.Beam b = beams.at(i);
+            if (b.life <= 0f) continue;           // 灭了的槽位还在环形窗口里，只是不再画
+            int a = Math.round(255f * (b.life / Balance.beam.lifeSec));
+            fill.setColor(b.color);
+            fill.setAlpha(a);
+            rf.set(b.x - b.width / 2f, top, b.x + b.width / 2f, b.y);
+            c.drawRect(rf, fill);
+            float core = b.crit ? 1f : 0.5f;      // 半宽 ⇒ 1px 与 2px
+            fill.setColor(0xFFFFFFFF);
+            rf.set(b.x - core, top, b.x + core, b.y);
+            c.drawRect(rf, fill);
+        }
+        fill.setAlpha(255);
+    }
+
+    /**
+     * 战斗部：连续杆画成**一条垂直弹轴的亮线**，碎片画成小方块。     *
      * <p>端点一律走 {@link WarheadRules#rodEnds}，本类**不持角度**：那四个 float 是命中与绘制
      * 唯一的共同几何，写第二次就会"画得直但打得歪"。速度为零时 {@code rodEnds} 返回 false，
      * 那一格既不画也不算——与 {@code Game.stepWarheads} 里同一个判据。
