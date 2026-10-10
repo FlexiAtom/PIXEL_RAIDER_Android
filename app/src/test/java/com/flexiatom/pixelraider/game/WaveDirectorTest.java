@@ -161,4 +161,115 @@ public class WaveDirectorTest {
         assertEquals(0, d.enemyCountFor(0));
         assertEquals(0, d.enemyCountFor(-3));
     }
+
+    // ---- 难度档（[规格 §8.2] 三档签字表的三个波次格；形状与"每格唯一读取点"见 §8.5）--------------
+
+    /**
+     * 普通档＝基线：三格与不带档的那枚 director **逐波等值**（gap 那格连 delta 都不给，就是要求位相同）。
+     * 这条红了＝有人改了 {@code Tier.NORMAL} 那一行而没打算动基线。
+     */
+    @Test
+    public void normalTierIsByteForByteTheBaseline() {
+        WaveDirector n = new WaveDirector(Balance.wave, Tier.NORMAL);
+        int[] plain = new int[6];
+        int[] scaled = new int[6];
+        for (int wave = 1; wave <= 48; wave++) {
+            assertEquals(d.enemyCountFor(wave), n.enemyCountFor(wave));
+            assertEquals(d.spawnGapFor(wave), n.spawnGapFor(wave), 0f);
+            assertEquals(d.kindWeightsFor(wave, plain), n.kindWeightsFor(wave, scaled));
+            for (int i = 0; i < 6; i++) {
+                assertEquals("种 " + i + " 在 " + wave + " 波被普通档动了", plain[i], scaled[i]);
+            }
+        }
+    }
+
+    /** [规格 §8.2] 数量乘子乘在**整波总数**上（休闲档第 39 波 46→39，少的那 7 只就是这条链给的）。 */
+    @Test
+    public void tierScalesTheWholeWaveCount() {
+        WaveDirector casual = new WaveDirector(Balance.wave, Tier.CASUAL);
+        WaveDirector terminal = new WaveDirector(Balance.wave, Tier.TERMINAL);
+        assertEquals(7, casual.enemyCountFor(1));
+        assertEquals(12, casual.enemyCountFor(5));
+        assertEquals(39, casual.enemyCountFor(39));
+        assertEquals(11, terminal.enemyCountFor(1));
+        assertEquals(27, terminal.enemyCountFor(10));
+        assertEquals(62, terminal.enemyCountFor(39));
+        // HUD 那条"敌人"进度条的分母与队列同源：waveTotalFor 复用的就是上面这个乘过数的方法
+        assertEquals(62, terminal.waveTotalFor(39));
+    }
+
+    /** [规格 §8.5] 档在权重里只动**精英那一格的下限**，其余五格是过渡曲线、与档无关。 */
+    @Test
+    public void tierMovesOnlyTheEliteFloorAmongWeights() {
+        int[] plain = new int[6], casual = new int[6], terminal = new int[6];
+        assertEquals(212, d.kindWeightsFor(1, plain));
+        assertEquals(212, new WaveDirector(Balance.wave, Tier.CASUAL).kindWeightsFor(1, casual));
+        assertEquals(216, new WaveDirector(Balance.wave, Tier.TERMINAL).kindWeightsFor(1, terminal));
+        for (int i = 0; i < 6; i++) {
+            if (i == Balance.Enemy.ELITE) continue;
+            assertEquals("种 " + i + " 不该被档位动（休闲）", plain[i], casual[i]);
+            assertEquals("种 " + i + " 不该被档位动（终结）", plain[i], terminal[i]);
+        }
+        assertEquals(2, casual[Balance.Enemy.ELITE]);      // 休闲档的下限＝今天那个字面量
+        assertEquals(6, terminal[Balance.Enemy.ELITE]);
+        // 过渡完成后（t 钳在 1）三档差的仍是同一个数：普通 32、终结 36，下限不参与那条 30 的斜坡
+        int[] p21 = new int[6], t21 = new int[6];
+        assertEquals(225, d.kindWeightsFor(21, p21));
+        assertEquals(229, new WaveDirector(Balance.wave, Tier.TERMINAL).kindWeightsFor(21, t21));
+        assertEquals(32, p21[Balance.Enemy.ELITE]);
+        assertEquals(36, t21[Balance.Enemy.ELITE]);
+    }
+
+    /**
+     * [规格 §8.2] gap 乘在**收紧之后的整段**上，但下限按**未缩放的原始值**钳 ⇒ 高波段乘子被这道闸吃掉
+     * 是设计（"同屏压力不该无限增大"），不是漏乘。这条同时钉住"乘子不许穿透 {@code spawnGapMin}"。
+     */
+    @Test
+    public void tierScalesGapButNeverBreaksItsFloor() {
+        WaveDirector casual = new WaveDirector(Balance.wave, Tier.CASUAL);
+        WaveDirector terminal = new WaveDirector(Balance.wave, Tier.TERMINAL);
+        assertEquals(0.6325f, casual.spawnGapFor(1), 1e-5f);
+        assertEquals(0.473f, terminal.spawnGapFor(1), 1e-5f);
+        assertEquals(0.27692f, terminal.spawnGapFor(39), 1e-5f);
+        // 第 60 波未缩放已是 0.196 < 0.22 ⇒ 三档同值，乘子无处生效
+        assertEquals(0.22f, casual.spawnGapFor(60), 1e-5f);
+        assertEquals(0.22f, terminal.spawnGapFor(60), 1e-5f);
+        for (int wave = 1; wave <= 120; wave++) {
+            assertTrue("终结档穿透了 spawnGapMin", terminal.spawnGapFor(wave) >= Balance.wave.spawnGapMin);
+            assertTrue("休闲档穿透了 spawnGapMin", casual.spawnGapFor(wave) >= Balance.wave.spawnGapMin);
+        }
+    }
+
+    /**
+     * [规格 §8.5] **Boss 豁免写成断言，不写成巧合**：Boss 血走 {@code bossHpFor} 那条 1.45^n 的独立写点，
+     * 根本不读档。这条是"终结档 hp 1.75 不许把第 8 个 Boss 推到 ≈2830 血"的唯一机器防线。
+     */
+    @Test
+    public void bossHpIsExemptFromTheTier() {
+        WaveDirector terminal = new WaveDirector(Balance.wave, Tier.TERMINAL);
+        WaveDirector casual = new WaveDirector(Balance.wave, Tier.CASUAL);
+        assertEquals(90, terminal.bossHpFor(5));
+        assertEquals(274, terminal.bossHpFor(20));
+        assertEquals(d.bossHpFor(5), casual.bossHpFor(5));
+        assertEquals(d.bossHpFor(40), terminal.bossHpFor(40));
+    }
+
+    /** 转授：{@code setTier} 是唯一的换档写点，换完之后三格一起跟着走（§8.5 的"档跟着一整局走"）。 */
+    @Test
+    public void setTierRetransmitsAllThreeWaveCells() {
+        WaveDirector x = new WaveDirector();
+        assertEquals(46, x.enemyCountFor(39));
+        assertEquals(0.322f, x.spawnGapFor(39), 1e-5f);
+        x.setTier(Tier.TERMINAL);
+        assertEquals(62, x.enemyCountFor(39));
+        assertEquals(0.27692f, x.spawnGapFor(39), 1e-5f);
+        int[] w = new int[6];
+        x.kindWeightsFor(1, w);
+        assertEquals(6, w[Balance.Enemy.ELITE]);
+        x.setTier(Tier.CASUAL);
+        assertEquals(39, x.enemyCountFor(39));
+        assertEquals(0.3703f, x.spawnGapFor(39), 1e-5f);
+        x.kindWeightsFor(1, w);
+        assertEquals(2, w[Balance.Enemy.ELITE]);
+    }
 }

@@ -28,21 +28,46 @@ public final class WaveDirector {
 
     private final Balance.Wave cfg;
 
+    /**
+     * 本局的难度档。[规格 §8.5] 这张表的三个波次格经这里"转授"——`Game` 是持有者，只有它的整局
+     * 重置能换值（{@link #setTier}）。
+     *
+     * <p>volatile 的理由与 {@code InputRouter.metrics} 同一条：整局重置有**一条**调用链来自 UI 线程
+     * （{@code MainActivity → GameSurfaceView.applyMetrics → onSurfaceReady}），而这三格在渲染线程上读。
+     * 引用写本身原子，所以不加它会有的后果不是撕裂，是"新一局头几帧还按上一局的档出怪"。
+     */
+    private volatile Tier tier = Tier.NORMAL;
+
     public WaveDirector() {
-        this(Balance.wave);
+        this(Balance.wave, Tier.NORMAL);
     }
 
     public WaveDirector(Balance.Wave cfg) {
+        this(cfg, Tier.NORMAL);
+    }
+
+    public WaveDirector(Balance.Wave cfg, Tier tier) {
         this.cfg = cfg;
+        this.tier = tier;
+    }
+
+    /** 唯一的换档入口（由 `Game` 的整局重置调用）。档是不可变的，所以这里只换引用。 */
+    public void setTier(Tier tier) {
+        this.tier = tier;
     }
 
     /**
      * [规格] 敌人数用**对数增长** {@code 5 + floor(n^0.72 × 3)}，不是线性的 5 + n×3。
      * 线性公式在 15 波后超出清场能力——那是数值问题，不是技术问题。
+     *
+     * <p>[规格 §8.2] 档位的 {@link Tier#countMul} 乘在**整波总数**上（不是乘在 base 上、也不是乘在
+     * 那个 3 上）：休闲档第 39 波 46 → 39 只，少的那 7 只是这条链给的。乘子必须落在这个方法内部，
+     * 落到建队列那侧会让 HUD"敌人"条的分母（{@link #waveTotalFor}）与队列实际排的数量不符。
      */
     public int enemyCountFor(int wave) {
         if (wave < 1) return 0;
         int n = cfg.base + (int) Math.floor(Math.pow(wave, cfg.exponent) * cfg.multiplier);
+        n = Math.round(n * tier.countMul);
         return Math.min(n, 400);   // 防御：数值表被改坏时不至于刷出天文数字
     }
 
@@ -81,6 +106,10 @@ public final class WaveDirector {
     /**
      * [规格] 基础小怪权重随波次衰减，高级怪逐步接管。
      * 返回 6 种敌人的权重（和不必为 1，由调用方按总权重抽），写入 {@code outWeights}。
+     *
+     * <p>[规格 §8.5] 档位只动**精英那一格的下限**（{@link Tier#eliteFloor}）：普通档那个字面量是 2，
+     * 终结档给 6——其余五格是"过渡曲线"，与档无关。这是全仓第一格由难度档改**形状量**而不是改乘子的
+     * 分叉点，所以它进表而不是进某枚乘子。
      */
     public int kindWeightsFor(int wave, int[] outWeights) {
         float t = Math.min(1f, Math.max(0f, (wave - 1) / 20f));   // 20 波内完成接管过渡
@@ -88,7 +117,7 @@ public final class WaveDirector {
         outWeights[Balance.Enemy.WEAVE] = Math.max(1, Math.round(80 * (1f - t * 0.70f)));
         outWeights[Balance.Enemy.SHOOTER] = Math.round(18 + 46 * t);
         outWeights[Balance.Enemy.RUSHER] = Math.round(8 + 52 * t);
-        outWeights[Balance.Enemy.ELITE] = Math.round(2 + 30 * t);
+        outWeights[Balance.Enemy.ELITE] = Math.round(tier.eliteFloor + 30 * t);
         outWeights[Balance.Enemy.BURSTER] = Math.round(4 + 26 * t);
         int total = 0;
         for (int i = 0; i < 6; i++) total += outWeights[i];
@@ -106,10 +135,17 @@ public final class WaveDirector {
         return weights.length - 1;
     }
 
-    /** 相邻出怪间隔：随波次略微收紧，钳下限。 */
+    /**
+     * 相邻出怪间隔：随波次略微收紧，钳下限。
+     *
+     * <p>[规格 §8.2] 档位的 {@link Tier#gapMul} 乘在**收紧之后的整段间隔**上，而 {@code spawnGapMin}
+     * 按**未缩放的原始值**钳——即终结档那 0.86 只在低波段真的更紧，越接近下限越被这道闸吃掉，永远
+     * 到不了 0.22 以下。这不是漏乘，是"同屏压力不该无限增大"那道闸本来的职责。
+     */
     public float spawnGapFor(int wave) {
         float g = cfg.spawnGap - (wave - 1) * cfg.spawnGapTightenPerWave;
-        return g < cfg.spawnGapMin ? cfg.spawnGapMin : g;
+        if (g < cfg.spawnGapMin) return cfg.spawnGapMin;
+        return Math.max(cfg.spawnGapMin, g * tier.gapMul);
     }
 
     /** [规格] 8 星区，前 4 无惩罚覆盖 1~20 波，后 4 带环境规则覆盖 21~40 波。 */

@@ -214,6 +214,14 @@ public final class Game implements GameThread.Host {
     private int coins;
     /** 金币倍率的小数余量，见 {@link #applyCollected}。 */
     private float coinCarry;
+    /** 芯片的同型余量（[规格 §8.4]：0.85／0.75 那两档不吃这层就会在 int 截断里被吞掉，早期局能吞整 1–2 枚）。 */
+    private float chipCarry;
+    /**
+     * 本局的难度档（[规格 §8.5] 那张独立表的持有者）。写点只有 {@link #applyTier} 一处，由整局重置调用。
+     * 这里一份＋{@code WaveDirector} 里那份"转授"的副本是 §8.5 定的形状：波次那三格经 director 读，
+     * 其余四格直读这一枚。volatile 的理由见 {@code WaveDirector.tier}（整局重置有一条链来自 UI 线程）。
+     */
+    private volatile Tier tier = Tier.NORMAL;
     private int bombs = Balance.player.startBombs;
     private boolean runOver;
 
@@ -521,7 +529,7 @@ public final class Game implements GameThread.Host {
      * （「开始新一局」走它），与暂停页那条定格态同一口径。
      */
     private void bootRun() {
-        resetRun();
+        resetRun(Tier.NORMAL);
         time.setPaused(true);
         openMenu();
     }
@@ -1028,7 +1036,7 @@ public final class Game implements GameThread.Host {
         } else if (action == PauseScreen.ACTION_RESTART) {
             // 出口一级化（规格 §四）：重开直接生效，没有二次确认弹窗
             restartFade = 1f;
-            resetRun();
+            resetRun(Tier.NORMAL);
         } else if (action == PauseScreen.ACTION_MENU) openMenu();   // 复用结算页那条链。这里**故意不解冻**时钟：菜单页没有"回到这一局"的出口，出去只有 resetRun（它自己解冻），所以留在定格态 = "这一局已被放弃"的唯一真值；ui 时钟照走，菜单动画不受影响
     }
 
@@ -1036,7 +1044,7 @@ public final class Game implements GameThread.Host {
     private void onResultPointerUp(int action) {
         if (action == ResultScreen.ACTION_RETRY) {
             restartFade = 1f;
-            resetRun();
+            resetRun(Tier.NORMAL);
         } else if (action == ResultScreen.ACTION_MENU) {
             openMenu();
         }
@@ -1062,7 +1070,7 @@ public final class Game implements GameThread.Host {
     private void onMenuPointerUp(int action) {
         if (action == MenuScreen.ACTION_RUN) {
             restartFade = 1f;
-            resetRun();               // 里面那句 popUntil(NONE) 顺手把这一页收掉
+            resetRun(Tier.NORMAL);    // 里面那句 popUntil(NONE) 顺手把这一页收掉
         } else if (action == MenuScreen.ACTION_GROWTH) {
             openGrowth();
         }
@@ -1348,7 +1356,9 @@ public final class Game implements GameThread.Host {
         Balance.Enemy spec = Balance.enemies[kind];
         e.kind = kind;
         e.boss = false;
-        e.hp = e.maxHp = spec.hp;
+        // [规格 §8.2] 小怪 hp 的档位乘子只走这一格（§8.5 那条"Boss 豁免"就靠它成立：initBoss 写的是
+        // 另一条独立数值，读的是 bossHpFor 那条 1.45^n，不经过这里）。普通档 1.00f 乘法精确 ⇒ 与今天逐字节同值。
+        e.hp = e.maxHp = Math.round(spec.hp * tier.hpMul);
         e.score = spec.score;
         e.radius = spec.hitRadius();
         e.x = rng.range(14f, Screen.LOGIC_W - 14f);
@@ -2093,13 +2103,21 @@ public final class Game implements GameThread.Host {
 
     private void applyCollected() {
         if (collected[Drops.CHIP] > 0) {
-            chips += collected[Drops.CHIP];
+            // [规格 §8.4] 难度掉落乘子挂在**入账口**、不挂在概率侧。三条芯片源（概率掉／Boss 必掉／
+            // 每波保底）在这一格汇成一条，所以一处就全覆盖，也不必跟幸运卡抢 clamp01 的上界。
+            // 带余量的累加与金币同型：0.85／0.75 那两档若在 int 上直接截断，就是规格判过两次的
+            // "卡面写了收益、结算里没有"第三次复发——挂在这里还顺带让 HUD 与暂停页那个芯片数是真的。
+            chipCarry += collected[Drops.CHIP] * tier.dropMul;
+            int wholeChips = (int) chipCarry;
+            chips += wholeChips;
+            chipCarry -= wholeChips;
             collected[Drops.CHIP] = 0;
         }
         if (collected[Drops.COIN] > 0) {
             // 倍率走**带余量**的累加：一次捡 1 枚 × 1.25 直接取整等于什么都没加，
             // 那正是规格点名的"卡面写了收益、结算里没有"。余数留着下一波一起结。
-            coinCarry += collected[Drops.COIN] * shopRun.coinMul();
+            // [规格 §8.4] 难度的 dropMul 与卡片的 coinMul 在这一格相乘——两者都是入账侧的乘子。
+            coinCarry += collected[Drops.COIN] * shopRun.coinMul() * tier.dropMul;
             int whole = (int) coinCarry;
             coins += whole;
             coinCarry -= whole;
@@ -2132,7 +2150,9 @@ public final class Game implements GameThread.Host {
 
     /** 唯一的受伤出口：状态层乘算在这里进，规格 §五 点名的"图标亮着但不生效"就断在这。 */
     private void hurtPlayer(int raw, boolean heavy) {
-        int flags = player.hurt(raw, status.takenMul());
+        // [规格 §8.2] 档位的 takenMul 与状态层那枚**在这一格相乘**：这里是全仓唯一的受伤出口，
+        // 四路上游（敌弹／小怪接触／Boss 接触／自爆）都汇到这一行，乘在别处就会漏掉一条。
+        int flags = player.hurt(raw, status.takenMul() * tier.takenMul);
         if (flags == PlayerState.FLAG_NONE) return;
         hurtFlash = 1f;
         shake = Math.max(shake, heavy ? 0.9f : 0.6f);
@@ -2265,8 +2285,26 @@ public final class Game implements GameThread.Host {
         if (haptics != null) haptics.heavyClick();
     }
 
-    /** 整局重置（死亡后重开、以及 surfaceChanged 的一次性初始化）。 */
-    public void resetRun() {
+    /**
+     * 换档的**唯一**写点：本类的四格（hp／受伤／金币／芯片）直读 {@link #tier}，波次那三格（数量／
+     * 精英下限／出怪间隔）由 {@code WaveDirector} 转授。两枚字段在这一格里一起写，所以"读到两份档"
+     * 没有窗口——这也是 §8.5 那句"每格仍只有唯一一个读取点"能立住的前提。
+     */
+    private void applyTier(Tier tier) {
+        this.tier = tier;
+        director.setTier(tier);
+    }
+
+    /**
+     * 整局重置（死亡后重开、以及 surfaceChanged 的一次性初始化）。
+     *
+     * <p>档在**这一格**落定——[规格 §8.5] 那句"档跟着一整局走"落到代码上就是"只有这里能换档"：中途换
+     * 会把已刷出的怪和接下来要刷的怪切成两套规则，HUD 那条"敌人"进度条的分母当场与队列不符。
+     * 今天四个调用点都传 {@link Tier#NORMAL}（选档入口在战役那批的选关页里，还没落地），所以这一格
+     * 的形参现在恒为基线，但它已经是**唯一**那条通道：漏染只可能出在这里，不必去别处找谁写了 tier。
+     */
+    public void resetRun(Tier tier) {
+        applyTier(tier);
         enemies.clear();
         // 指定挂在**敌池槽号**上，池子清空后那个 (槽号, born) 对就成了悬空引用。每帧
         // {@link #stepDesignation} 那三条判据本来也会把它清掉，但那是"下一帧才发现"的清理；
@@ -2297,6 +2335,7 @@ public final class Game implements GameThread.Host {
         chips = 0;
         coins = Balance.player.startCoins;
         coinCarry = 0f;
+        chipCarry = 0f;
         bombs = Balance.player.startBombs + growth.extraBombs();
         world = 0f;
         runOver = false;
