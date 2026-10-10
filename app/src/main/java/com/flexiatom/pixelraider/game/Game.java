@@ -358,6 +358,13 @@ public final class Game implements GameThread.Host {
      * （不静默降级成"存进内存、下次开机就没了"，那是 {@code KeyValue.EMPTY} 那条口径明确否掉的假象）。
      */
     private AsyncSaveSink saveSink;
+    /**
+     * 正在等的读档槽号，-1 = 没在等。它同时是"在飞的那一次"的闸门：{@code AsyncSaveSink} 的交回形状
+     * 是一枚引用槽，第二次投递会盖掉第一份的结果，而盖掉之后没人知道那一行点的是哪个槽。
+     */
+    private int loadingSlot = -1;
+    /** 上一次读档的失败边沿。存档页读走一次就清（{@link #takeLoadFailure()}），不留在页面上当常驻状态。 */
+    private boolean loadFailed;
     /** 一局结束（死亡或通关）那一刻的界面时间：结算页的分阶段揭示以它为原点。 */
     private float resultAtUi;
     /** 拉开暂停那一刻的界面时间：入场动画与"淡完才可点"以它为原点（规格 §五 uiTime）。 */
@@ -453,6 +460,292 @@ public final class Game implements GameThread.Host {
     /** 存档通路是否可用。null 出口不是错误状态，是"没注入"，界面据此画不可用那一形。 */
     public boolean saveAvailable() {
         return saveSink != null;
+    }
+
+    // ---- 局内快照（批2-b：序列化 + 两段式交接的渲染线程这一头）-------------------------------
+
+    /**
+     * 拍下<b>当前这一局</b>的仿真状态，返回一份可以直接交给
+     * {@link com.flexiatom.pixelraider.plat.AsyncSaveSink#submitWrite} 的字节。
+     *
+     * <p><b>它不碰 IO，一帧内做完</b>（[规格 §八] 那条红线只管"等盘"）。整个方法是读字段 + 写数组，
+     * 量级实测 45–106 KB（池件 §8.11），比一帧的绘制段便宜；而按下「存档」之后玩家本来就要等页面
+     * 回话，那一次点击换一整局的确定性是这笔交易的原价。
+     *
+     * <p><b>调用前提：{@code time.isPaused()} 为真。</b>这不是礼貌而是正确性——本方法逐槽读一只敌人的
+     * 二十几个字段，仿真还在推进时读到的就是"上半帧的血量配下半帧的坐标"。真闸取 isPaused 而不是
+     * "栈顶 == 存档页"（池件 §7 第 2 条：任何一扇模态页开着都冻住了世界，判栈顶会漏掉暂停页那种
+     * 同样安全的时机）。
+     *
+     * <p>段序与"什么不在字节里"记在 {@link Snapshot} 的类注释，本方法是那份清单的唯一实现处。
+     */
+    public byte[] captureRun() {
+        // 64 KB 的起点按 §8.11 那个区间给：给小了只是多搬一次（Buf 自己倍增），给大了白占内存。
+        Buf w = new Buf(64 << 10);
+        Snapshot.putHeader(w);
+        int top = metrics.battleTop();
+        int band = metrics.battleHeight();
+        // 八座池：顺序＝本类的字段声明序（敌人/玩家弹/敌弹/普通导弹/格斗导弹/战斗部/光束/掉落）
+        enemies.writeSnapshot(w, top, band);
+        shots.writeSnapshot(w, top, band);
+        hostile.writeSnapshot(w, top, band);
+        missiles.writeSnapshot(w, top, band);
+        dogfightMissiles.writeSnapshot(w, top, band);
+        warheads.writeSnapshot(w, top, band);
+        beams.writeSnapshot(w, top, band);
+        drops.writeSnapshot(w, top, band);
+        // 九个状态对象 + 随机源
+        player.writeSnapshot(w, top, band);
+        status.writeSnapshot(w);
+        combo.writeSnapshot(w);
+        overload.writeSnapshot(w);
+        hitStop.writeSnapshot(w);
+        wave.writeSnapshot(w);
+        shopRun.writeSnapshot(w);
+        stats.writeSnapshot(w);
+        trend.writeSnapshot(w);
+        rng.writeSnapshot(w);
+        writeRunScalars(w);
+        return w.toByteArray();
+    }
+
+    /**
+     * 把一份字节套回本局。<b>要么整套上，要么一套都不上</b>——这条保证是这里存在的唯一理由：
+     * {@code captureRun()} 先抓一份"退回点"，中途任何一格验不过就按它整套重放，于是失败的那次读档
+     * 既不会留下半套状态，也不会毁掉玩家正在打的这一局。
+     *
+     * <p><b>模式不在字节里</b>（真源是槽位账本那枚 packed meta，见 {@link Snapshot} 第 1 条），所以
+     * 读档入口的次序是"先 {@link #applyMode} 再套字节"，这件事由 {@link #applyPendingLoad()} 负责，
+     * 不在本方法里读账本——本方法只管字节。
+     *
+     * @return false = 这份字节不合法（{@link Buf.Invalid}），本局已退回套它之前的状态
+     */
+    public boolean applyRun(byte[] data) {
+        if (data == null) return false;
+        final byte[] undo = captureRun();
+        try {
+            readAll(data);
+        } catch (Buf.Invalid bad) {
+            try {
+                readAll(undo);
+            } catch (Buf.Invalid impossible) {
+                // 自己刚写的字节被自己的读端拒了＝编解码不对称（写与读的段序分叉了）。那是码错，
+                // 不是玩家的档坏； swallow 它会留下一局混合状态且没有任何一行说它发生过。
+                impossible.addSuppressed(bad);
+                throw impossible;
+            }
+            return false;
+        }
+        afterApply();
+        return true;
+    }
+
+    /**
+     * 按下「存档」：拍字节 → 改槽位账本 → 把字节交给 IO 线程。
+     *
+     * <p>三步的次序有条件。<b>字节先产出来</b>：只有它存在了才配登记一个槽（反过来是先承诺后落盘，
+     * 掩码会说"有档"而盘上什么都没有）。<b>账本在提交之前就改对</b>：列表页画"有档/空格"读的是掩码
+     * 而不是介质（那正是 {@link SaveSlots} 存在的理由），慢一帧就是"点了没反应"。IO 排在该槽后面，
+     * {@code submitWrite} 之后那份字节归 IO 线程，本类再也不碰它。
+     *
+     * @param slot        目标槽；{@link SaveSlots#NONE} = 自己找第一个空槽
+     * @param epochMillis 存档时刻。<b>由调用方给</b>——本类一次挂钟读取都没有（那条纪律的原文在
+     *                    {@link SaveSlots#occupy}；要时刻的人在场外，见批2-c 的接线账）
+     * @return 落成的槽号；{@link SaveSlots#NONE} = 通路没注入、槽号非法，或<b>50 槽已满</b>
+     *         （满槽是拒绝，不自动淘汰最旧那份——腾位是玩家的显式动作）
+     */
+    public int saveRun(int slot, long epochMillis) {
+        if (saveSink == null) return SaveSlots.NONE;
+        int target = slot == SaveSlots.NONE ? saveSlots.allocateFree() : slot;
+        if (target < 0 || target >= SaveSlots.CAPACITY) return SaveSlots.NONE;
+        byte[] data = captureRun();
+        int waveNo = wave.wave();
+        saveSlots.occupy(target,
+                SaveSlots.packMeta(mode, mode.chapterForWave(waveNo), waveNo, (int) score),
+                epochMillis);
+        saveSlots.commit(store);
+        saveSink.submitWrite(target, data);
+        return target;
+    }
+
+    /**
+     * 按下存档页某一行：投递一次读意图，<b>不等它</b>。结果落在 {@code AsyncSaveSink} 那枚引用槽里，
+     * 由 {@link #applyPendingLoad()} 在安全点取回。
+     *
+     * <p>同一时刻只允许一份在飞：那枚槽只有一个格，第二次投递会把第一份的字节盖掉，而槽号配对
+     * 随之消失——被盖掉的玩家那一次点击就成了"点了没反应"。挡住比调和便宜。
+     */
+    public void requestLoad(int slot) {
+        if (saveSink == null || loadingSlot >= 0) return;
+        if (slot < 0 || slot >= SaveSlots.CAPACITY) return;
+        loadingSlot = slot;
+        saveSink.requestRead(slot);
+    }
+
+    /** 有没有一份档正在等回来（存档页那一行"读取中…"的读数）。 */
+    public boolean loadInFlight() {
+        return loadingSlot >= 0;
+    }
+
+    /** 读走"上一次读档失败"这一次边沿：页面提示完就清，不留成常驻状态。 */
+    public boolean takeLoadFailure() {
+        boolean failed = loadFailed;
+        loadFailed = false;
+        return failed;
+    }
+
+    /**
+     * 反向两段式的后半：{@code frame} 在安全点抽一次。
+     *
+     * <p><b>位置只有一处：{@code consumeInput()} 之后、{@code time.advance()} 之前。</b>那里的仿真刚收完
+     * 输入、还没推进任何一步，套一套新状态不会踩在任何一次判定中间；放进那个补帧 for 里是错的
+     * （一步一半）。
+     *
+     * <p><b>只在 {@code time.isPaused()} 为真时动手</b>。读的结果要是回来得比页面关闭还晚，那一格就
+     * 继续留在槽里等下一次冻住——半路把一套状态盖到正在打的局上，玩家会看见自己的船瞬移而没有任何
+     * 一次点击解释它。这里不取走就等于不产生失败：槽还在，{@link #loadInFlight()} 照实说"在等"。
+     */
+    private void applyPendingLoad() {
+        if (loadingSlot < 0 || !time.isPaused()) return;
+        AsyncSaveSink.Read read = saveSink.pollRead();
+        if (read == null) return;
+        loadingSlot = -1;
+        long meta = saveSlots.meta(read.slot);
+        // 模式不进字节（真源是账本 meta 的 mode/tier 两位；章号由还原出来的波号推出），所以它得在
+        // 套字节之外单独换一次。⚠ 它**不在 undo 那份字节里**，于是失败时也必须自己退回——否则"读档没成功"
+        // 的局会留下一件没人按过的改动：hp、敌数、掉落乘子从此按别人那一档的规则跑。
+        // 介质读回 null（那一槽其实没字节）也走同一条失败路：页面报"这一份读不出来"。
+        Mode previous = mode;
+        Tier tier = Tier.at(SaveSlots.tierOf(meta));
+        applyMode(SaveSlots.modeOf(meta) == 1 ? Mode.campaign(tier) : Mode.endless(tier));
+        if (applyRun(read.data)) {
+            loadFailed = false;
+            return;
+        }
+        applyMode(previous);
+        loadFailed = true;
+    }
+
+    /** 读端总装：段序与 {@link #captureRun()} 逐项镜像，最后断言<b>一口不剩</b>。 */
+    private void readAll(byte[] data) {
+        Buf.Reader r = new Buf.Reader(data);
+        Snapshot.readHeader(r);
+        int top = metrics.battleTop();
+        int band = metrics.battleHeight();
+        enemies.restoreSnapshot(r, top, band);
+        shots.restoreSnapshot(r, top, band);
+        hostile.restoreSnapshot(r, top, band);
+        missiles.restoreSnapshot(r, top, band);
+        dogfightMissiles.restoreSnapshot(r, top, band);
+        warheads.restoreSnapshot(r, top, band);
+        beams.restoreSnapshot(r, top, band);
+        drops.restoreSnapshot(r, top, band);
+        player.restoreSnapshot(r, top, band);
+        status.restoreSnapshot(r);
+        combo.restoreSnapshot(r);
+        overload.restoreSnapshot(r);
+        hitStop.restoreSnapshot(r);
+        wave.restoreSnapshot(r);
+        shopRun.restoreSnapshot(r);
+        stats.restoreSnapshot(r);
+        trend.restoreSnapshot(r);
+        rng.restoreSnapshot(r);
+        readRunScalars(r);
+        if (r.remaining() != 0) {
+            throw new Buf.Invalid("snapshot leaves " + r.remaining()
+                    + " bytes unread - write and read segments no longer mirror each other");
+        }
+    }
+
+    /** {@code Game} 自己那一段：只有标量。模式与章号不在这里（{@link Snapshot} 类注释的不存清单）。 */
+    private void writeRunScalars(Buf w) {
+        w.writeFloat(world);
+        w.writeLong(score);
+        w.writeInt(chips);
+        w.writeInt(coins);
+        w.writeFloat(coinCarry);
+        w.writeFloat(chipCarry);
+        w.writeInt(bombs);
+        w.writeBoolean(runOver);
+        w.writeInt(designatedSlot);
+        w.writeLong(designatedBorn);
+        w.writeInt(lastFlowPhase);
+        w.writeBoolean(shopPending);
+    }
+
+    /** 先全部验完再一次性赋值（与各个 {@code restoreSnapshot} 同一条纪律：不被拒时不留半套）。 */
+    private void readRunScalars(Buf.Reader r) {
+        float worldSecs = r.readFloat();
+        long sc = r.readLong();
+        int ch = r.readInt();
+        int cn = r.readInt();
+        float cc = r.readFloat();
+        float chc = r.readFloat();
+        int bm = r.readInt();
+        boolean over = r.readBoolean();
+        int dSlot = r.readInt();
+        long dBorn = r.readLong();
+        int flowPhase = r.readInt();
+        boolean pending = r.readBoolean();
+
+        if (!Float.isFinite(worldSecs) || worldSecs < 0f) throw new Buf.Invalid("world " + worldSecs);
+        if (sc < 0L) throw new Buf.Invalid("score " + sc);
+        if (ch < 0 || cn < 0 || bm < 0) throw new Buf.Invalid("negative chips/coins/bombs");
+        // 两枚余量的定义就是"取整之后剩下的那点"（applyCollected 每次减去取出的整数枚），所以恒在
+        // [0,1)。越界不是玩家数据歪，是布局错位——夹住它等于把一次错位读成"金币少了几枚"那种查不出来的小偏差。
+        if (!(cc >= 0f && cc < 1f) || !(chc >= 0f && chc < 1f)) {
+            throw new Buf.Invalid("carry out of range: coin " + cc + " chip " + chc);
+        }
+        if (dSlot != MissileBehavior.NO_DESIGNATED && (dSlot < 0 || dSlot >= enemies.capacity())) {
+            throw new Buf.Invalid("designated slot " + dSlot + " out of " + enemies.capacity());
+        }
+        if (flowPhase < WaveFlow.PREP || flowPhase > WaveFlow.VICTORY) {
+            throw new Buf.Invalid("lastFlowPhase " + flowPhase);
+        }
+
+        world = worldSecs;
+        score = sc;
+        chips = ch;
+        coins = cn;
+        coinCarry = cc;
+        chipCarry = chc;
+        bombs = bm;
+        runOver = over;
+        designatedSlot = dSlot;
+        // 没指定时那一枚 born 一律归零：写侧可能带着上一次指定的残值（designateSlot 只改槽号那一支
+        // 会顺手写 born，清空那一支不一定写过 born），留着它就是留一个"看着像身份"的数。
+        designatedBorn = dSlot == MissileBehavior.NO_DESIGNATED ? 0L : dBorn;
+        lastFlowPhase = flowPhase;
+        shopPending = pending;
+    }
+
+    /**
+     * 套完字节之后要把<b>不在字节里的那几格</b>重新对齐，四件事各有一条不做的后果：
+     *
+     * <ul>
+     *   <li>{@code chain.clear()}：弹链里还排着上一段那一次扣扳机没吐完的几发。不丢就会在还原后的
+     *       位置上补射出一次"我从没按过的第二发"。</li>
+     *   <li>震屏／受伤闪白／扫描闪白归零：它们是某一<em>瞬间</em>的冲击，跨一次存档没有意义。留着
+     *       等于读档后画面自己抖一下。</li>
+     *   <li>血/盾残影重播种：残影长度＝"上一条读数减这一条"，而上一条属于段前的玩家。不重播种，
+     *       读档第一眼会看见一条从别的血量拖过来的长尾。</li>
+     *   <li>走位锚点与欠账重对齐到还原后的位置：锚点是<b>手指</b>位置的参考系，不重对齐的话玩家按住
+     *       的手指会在下一帧把船从新位置拖回旧位置（那正好抵消掉这次还原）。</li>
+     * </ul>
+     *
+     * <p>手指本身不断（{@code movePointerId} 留着）：读档时玩家大概率还按着，抬起才算结束。
+     */
+    private void afterApply() {
+        chain.clear();
+        shake = 0f;
+        hurtFlash = 0f;
+        sweepFlash = 0f;
+        hpTrail = player.hpRatio();
+        shieldTrail = player.shieldRatio();
+        for (int i = 0; i < collected.length; i++) collected[i] = 0;
+        anchorX = player.x;
+        anchorY = player.y;
+        drag.clear();
     }
 
     /**
@@ -618,6 +911,9 @@ public final class Game implements GameThread.Host {
         // 输入**每帧一次、必须在 advance 之前**：Time 一被 setPaused(true) 就返回 0 步，
         // 挪进步骤循环等于按下暂停那一刻起再也收不到任何事件——面板上的"继续作战"永远点不动。
         consumeInput();
+        // 读档的交回点。它必须紧贴 consumeInput 之后、advance 之前，且只在冻住的世界里动手，
+        // 两条理由都写在 applyPendingLoad 上。
+        applyPendingLoad();
         int steps = time.advance(deltaSeconds);
         probe.begin(FrameProbe.STEP);
         for (int i = 0; i < steps; i++) {

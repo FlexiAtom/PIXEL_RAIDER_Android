@@ -216,6 +216,73 @@ public final class PlayerState {
         return maxShield <= 0 ? 0f : (float) shield / maxShield;
     }
 
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下机体：<b>位置、血盾与它们的上限、手持那把枪、三格体系记忆</b>。
+     *
+     * <p>{@code maxHp}/{@code maxShield} 必须跟着存，不能读档时从 {@code Balance} ＋成长树现算：
+     * 商店的装甲卡把这台上限抬过 {@code raiseCaps}，现算出来的是"这局没买装甲"的那一台，
+     * 于是恢复后第一发子弹的过盾结算都对不上 HUD 上那条盾条。
+     *
+     * <p>{@code scratch} 不存——它是 {@link #hurt} 每次现写的输出缓冲。
+     */
+    public void writeSnapshot(Buf w, int bandTop, int bandH) {
+        w.writeFloat(x);
+        Snapshot.putY(w, y, bandTop, bandH);
+        w.writeFloat(px);
+        Snapshot.putY(w, py, bandTop, bandH);
+        w.writeInt(hp);
+        w.writeInt(shield);
+        w.writeInt(maxHp);
+        w.writeInt(maxShield);
+        w.writeFloat(radius);
+        w.writeFloat(invuln);
+        w.writeInt(weaponId);
+        w.writeBoolean(alive);
+        w.writeFloat(fireTimer);
+        for (int v : lastGunOfSchool) w.writeInt(v);
+    }
+
+    /**
+     * 还原。{@code weaponId} 与 {@code lastGunOfSchool} 都要验范围：它们都是**买断卡才打得开**的
+     * 档位，非法值会让下一次 {@link #cooldownFor} 直接读到数组外（越界抛在渲染中途，
+     * 那正是 {@code Rng#chance} 那条注释拒绝的形状）。
+     */
+    public void restoreSnapshot(Buf.Reader r, int bandTop, int bandH) {
+        x = r.readFloat();
+        y = Snapshot.getY(r, bandTop, bandH);
+        px = r.readFloat();
+        py = Snapshot.getY(r, bandTop, bandH);
+        hp = r.readInt();
+        shield = r.readInt();
+        maxHp = r.readInt();
+        maxShield = r.readInt();
+        radius = r.readFloat();
+        invuln = r.readFloat();
+        int id = r.readInt();
+        alive = r.readBoolean();
+        fireTimer = r.readFloat();
+        int[] guns = new int[lastGunOfSchool.length];
+        r.readInts(guns, 0, guns.length);
+        if (id < 0 || id >= Balance.weapons.length) {
+            throw new Buf.Invalid("weapon id " + id + " out of " + Balance.weapons.length);
+        }
+        if (maxHp <= 0 || maxShield < 0) throw new Buf.Invalid("bogus caps: hp " + maxHp + " shield " + maxShield);
+        if (hp < 0 || hp > maxHp) throw new Buf.Invalid("hp " + hp + " outside 0.." + maxHp);
+        if (shield < 0) throw new Buf.Invalid("shield " + shield + " below 0");
+        if (radius <= 0f) throw new Buf.Invalid("radius " + radius);
+        if (invuln < 0f || fireTimer < 0f) throw new Buf.Invalid("negative timer");
+        // alive=false 只能与 hp==0 同时出现：那是 hurt() 里 FLAG_DIED 那一条唯一的写法。读档时
+        // 见到"死了却还有血"说明这一段的字节是错位的，宁可整份拒掉，也别放进一局里当"复活不了的人"。
+        if (!alive && hp > 0) throw new Buf.Invalid("alive=false while hp=" + hp);
+        for (int v : guns) {
+            if (v < -1 || v >= Balance.weapons.length) throw new Buf.Invalid("school memory holds " + v);
+        }
+        weaponId = id;
+        System.arraycopy(guns, 0, lastGunOfSchool, 0, guns.length);
+    }
+
     private static float clampf(float v, float lo, float hi) {
         return v < lo ? lo : (v > hi ? hi : v);
     }

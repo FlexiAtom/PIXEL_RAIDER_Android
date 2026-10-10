@@ -264,4 +264,110 @@ public final class Missiles {
     public void clear() {
         while (activeCount > 0) killAt(activeCount - 1);
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下在场的那几枚。<b>跨池引用不做还原校验</b>，这不是省事：
+     * {@link #Missile() 导弹}持的目标身份是<b>(敌 obj 槽号, born) 一对</b>，而"这一对还成立吗"
+     * 本来就在 {@code MissileBehavior} 的每一帧判据里（{@code Enemies.isLive} ∧ born 相符 ∧ hp &gt; 0）。
+     * 于是快照只要把那两个数原样带走，下一帧的判据自己会把已经断掉的那一侧降级成
+     * {@link Missile#NO_TARGET}——恢复出的悬空引用与游戏里正常死掉的目标走的是<b>同一条</b>通路，
+     * 不需要在还原端再造第二个判据（那才是这仓最恨的第二个真源）。
+     *
+     * <p> {@code nextSeq} 必须存，理由与 {@code BulletPool} 那条同（淘汰比的是 seq 而非槽号）。
+     * {@code evicted} 那枚池外副本不存：它只在被淘汰的那一帧被读，跨不过一次存档。
+     */
+    public void writeSnapshot(Buf w, int bandTop, int bandH) {
+        w.writeInt(activeCount);
+        w.writeInts(active, 0, activeCount);
+        w.writeLong(nextSeq);
+        for (int i = 0; i < activeCount; i++) writeMissile(w, objs[active[i]], bandTop, bandH);
+    }
+
+    public void restoreSnapshot(Buf.Reader r, int bandTop, int bandH) {
+        int n = r.readInt();
+        if (n < 0 || n > objs.length) {
+            throw new Buf.Invalid("missile count " + n + " vs capacity " + objs.length);
+        }
+        int[] slots = new int[n];
+        r.readInts(slots, 0, n);
+        clear();
+        boolean[] seen = new boolean[objs.length];
+        for (int i = 0; i < n; i++) {
+            int s = slots[i];
+            if (s < 0 || s >= objs.length) throw new Buf.Invalid("missile slot " + s + " out of " + objs.length);
+            if (seen[s]) throw new Buf.Invalid("missile slot " + s + " listed twice");
+            seen[s] = true;
+            active[i] = s;
+        }
+        activeCount = n;
+        for (int i = objs.length - 1, k = 0; i >= 0; i--) {
+            if (!seen[i]) free[k++] = i;
+        }
+        freeCount = objs.length - n;
+        nextSeq = r.readLong();
+        for (int i = 0; i < n; i++) readMissile(r, objs[active[i]], bandTop, bandH);
+        long maxSeq = 0L;
+        for (int i = 0; i < n; i++) {
+            long s = objs[active[i]].seq;
+            if (s <= 0L) throw new Buf.Invalid("missile seq " + s);
+            if (s >= maxSeq) maxSeq = s;
+        }
+        if (nextSeq <= maxSeq) throw new Buf.Invalid("nextSeq " + nextSeq + " at or below stored seq " + maxSeq);
+    }
+
+    private static void writeMissile(Buf w, Missile m, int bandTop, int bandH) {
+        w.writeLong(m.seq);
+        w.writeInt(m.weaponId);
+        w.writeFloat(m.x);
+        Snapshot.putY(w, m.y, bandTop, bandH);
+        w.writeFloat(m.px);
+        Snapshot.putY(w, m.py, bandTop, bandH);
+        w.writeFloat(m.vx);
+        w.writeFloat(m.vy);
+        w.writeFloat(m.life);
+        w.writeFloat(m.boostT);
+        w.writeFloat(m.seekT);
+        w.writeInt(m.phase);
+        w.writeFloat(m.damage);
+        w.writeBoolean(m.crit);
+        w.writeFloat(m.size);
+        w.writeInt(m.color);
+        w.writeInt(m.targetSlot);
+        w.writeLong(m.targetBorn);
+        w.writeInt(m.boundSlot);
+        w.writeLong(m.boundBorn);
+        w.writeFloat(m.unitX);
+        Snapshot.putY(w, m.unitY, bandTop, bandH);
+        w.writeBoolean(m.unitSet);
+        w.writeBoolean(m.seekerOpen);
+    }
+
+    private static void readMissile(Buf.Reader r, Missile m, int bandTop, int bandH) {
+        m.seq = r.readLong();
+        m.weaponId = r.readInt();
+        m.x = r.readFloat();
+        m.y = Snapshot.getY(r, bandTop, bandH);
+        m.px = r.readFloat();
+        m.py = Snapshot.getY(r, bandTop, bandH);
+        m.vx = r.readFloat();
+        m.vy = r.readFloat();
+        m.life = r.readFloat();
+        m.boostT = r.readFloat();
+        m.seekT = r.readFloat();
+        m.phase = r.readInt();
+        m.damage = r.readFloat();
+        m.crit = r.readBoolean();
+        m.size = r.readFloat();
+        m.color = r.readInt();
+        m.targetSlot = r.readInt();
+        m.targetBorn = r.readLong();
+        m.boundSlot = r.readInt();
+        m.boundBorn = r.readLong();
+        m.unitX = r.readFloat();
+        m.unitY = Snapshot.getY(r, bandTop, bandH);
+        m.unitSet = r.readBoolean();
+        m.seekerOpen = r.readBoolean();
+    }
 }

@@ -351,4 +351,33 @@ public final class ShopRun {
     private float mul(int cardId, float perLevel) {
         return 1f + perLevel * levelOf(cardId);
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 二十格等级 = 这一局 build 的全部真源。它是"局内成长"唯一的落点：结算页那行
+     * {@link #totalLevels()}、{@code MissileBehavior} 每帧解析的那一族有效乘子、武器持有闸门
+     * （{@link #weaponUnlocked}）全读它，所以这份快照<b>没有存任何一条由它派生的数</b>——
+     * 那正是本类"乘子从等级现算而不是买一张就乘一次"那条纪律在跨局方向的延伸。
+     *
+     * <p>复用同一个数组写入（{@link #levels()} 那份引用挂在 {@code ShopRules.Snapshot} 上），
+     * 所以还原不换引用，挂在它上面的面板不用重接。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeInts(level, 0, level.length);
+    }
+
+    /**
+     * 逐格验非负与上限。上界 {@code 4096} 不是数值裁定：满级有上限的那几张卡远在这之下，
+     * 无限级的那几张每级都是定点增量，打到四千级早就不是人在玩的局了——会出现这个数的只有
+     * <b>字节错位</b>，而一次放过就会让 {@link #damageBonus()} 给出六位数的每发伤害。
+     */
+    public void restoreSnapshot(Buf.Reader r) {
+        int[] in = new int[level.length];
+        r.readInts(in, 0, in.length);
+        for (int v : in) {
+            if (v < 0 || v > 4096) throw new Buf.Invalid("card level " + v + " outside 0..4096");
+        }
+        System.arraycopy(in, 0, level, 0, in.length);
+    }
 }

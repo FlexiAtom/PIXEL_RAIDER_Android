@@ -178,4 +178,88 @@ public final class BulletPool {
     public void clear() {
         while (activeCount > 0) killAt(activeCount - 1);
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下在场的那几发。<b>{@code nextSeq} 存，其余三枚计数不存</b>：
+     * 淘汰判据是"按 {@link Bullet#seq} 比谁最老"，恢复后新生成的那发必须比快照里所有的都大，
+     * 否则第一发就会把一枚在途弹顶掉（与 {@link Enemies} 存 {@code spawnTotal} 是同一条理由）。
+     * 而 {@code spawnTotal}/{@code evictTotal}/{@code refuseTotal} 全仓没有读取点，只是测试与调试页的
+     * 读数——丢了它们，玩法逐帧不变。
+     */
+    public void writeSnapshot(Buf w, int bandTop, int bandH) {
+        w.writeInt(activeCount);
+        w.writeInts(active, 0, activeCount);
+        w.writeLong(nextSeq);
+        for (int i = 0; i < activeCount; i++) writeBullet(w, objs[active[i]], bandTop, bandH);
+    }
+
+    public void restoreSnapshot(Buf.Reader r, int bandTop, int bandH) {
+        int n = r.readInt();
+        if (n < 0 || n > objs.length) {
+            throw new Buf.Invalid("bullet count " + n + " vs capacity " + objs.length);
+        }
+        int[] slots = new int[n];
+        r.readInts(slots, 0, n);
+        clear();
+        boolean[] seen = new boolean[objs.length];
+        for (int i = 0; i < n; i++) {
+            int s = slots[i];
+            if (s < 0 || s >= objs.length) throw new Buf.Invalid("bullet slot " + s + " out of " + objs.length);
+            if (seen[s]) throw new Buf.Invalid("bullet slot " + s + " listed twice");
+            seen[s] = true;
+            active[i] = s;
+        }
+        activeCount = n;
+        for (int i = objs.length - 1, k = 0; i >= 0; i--) {
+            if (!seen[i]) free[k++] = i;      // 弹出顺序回到"由低到高"，与构造期同形
+        }
+        freeCount = objs.length - n;
+        nextSeq = r.readLong();
+        for (int i = 0; i < n; i++) readBullet(r, objs[active[i]], bandTop, bandH);
+        long maxSeq = 0L;
+        for (int i = 0; i < n; i++) {
+            long s = objs[active[i]].seq;
+            if (s <= 0L) throw new Buf.Invalid("bullet seq " + s);
+            if (s >= maxSeq) maxSeq = s;
+        }
+        if (nextSeq <= maxSeq) throw new Buf.Invalid("nextSeq " + nextSeq + " at or below stored seq " + maxSeq);
+    }
+
+    private static void writeBullet(Buf w, Bullet b, int bandTop, int bandH) {
+        w.writeFloat(b.x);
+        Snapshot.putY(w, b.y, bandTop, bandH);
+        w.writeFloat(b.vx);
+        w.writeFloat(b.vy);
+        w.writeFloat(b.px);
+        Snapshot.putY(w, b.py, bandTop, bandH);
+        w.writeFloat(b.life);
+        w.writeFloat(b.maxLife);
+        w.writeFloat(b.damage);
+        w.writeFloat(b.size);
+        w.writeInt(b.color);
+        w.writeInt(b.weaponId);
+        w.writeLong(b.seq);
+        w.writeBoolean(b.crit);
+        w.writeBoolean(b.hostile);
+    }
+
+    private static void readBullet(Buf.Reader r, Bullet b, int bandTop, int bandH) {
+        b.x = r.readFloat();
+        b.y = Snapshot.getY(r, bandTop, bandH);
+        b.vx = r.readFloat();
+        b.vy = r.readFloat();
+        b.px = r.readFloat();
+        b.py = Snapshot.getY(r, bandTop, bandH);
+        b.life = r.readFloat();
+        b.maxLife = r.readFloat();
+        b.damage = r.readFloat();
+        b.size = r.readFloat();
+        b.color = r.readInt();
+        b.weaponId = r.readInt();
+        b.seq = r.readLong();
+        b.crit = r.readBoolean();
+        b.hostile = r.readBoolean();
+    }
 }

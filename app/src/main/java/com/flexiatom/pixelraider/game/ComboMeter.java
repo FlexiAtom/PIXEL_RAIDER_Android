@@ -81,4 +81,35 @@ public final class ComboMeter {
         hits = 0;
         peak = 0;
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 三格全存。{@code lastHitAt} 是这里面唯一"看着像时间戳所以容易被当成画面量"的一格，
+     * 但它决定 {@link #count} 当下算不算还在窗口内 —— 不存就等于"读档后连击一定断了"。
+     * 它必须走 {@code float} 的<b>原始位</b>：没开过连击的初值是 {@link Float#NEGATIVE_INFINITY}，
+     * 任何文本化编码都会把它读成异常（{@link Buf} 类注释第二条说的就是这一格）。
+     *
+     * <p>它是<b>世界秒</b>口径，所以这份快照必须与 {@code Game.world} 同进同出：只还原其一，
+     * 窗口判据就整段错位（world 大而 lastHitAt 小 ⇒ 连击凭空断；反之 ⇒ 窗口赖着不走）。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeFloat(lastHitAt);
+        w.writeInt(hits);
+        w.writeInt(peak);
+    }
+
+    public void restoreSnapshot(Buf.Reader r) {
+        float at = r.readFloat();
+        int h = r.readInt();
+        int p = r.readInt();
+        // NaN 不在窗口判据的任何一侧（<= 与 > 都假），它会让 count() 稳定返回 0 而 hit() 把窗口
+        // 永远判成"过期"——那不是断连击，那是这一格再也不会活。原始位编码本身造不出 NaN，
+        // 能出现它的只有改坏的字节，所以这里按"这份档不合法"处理而不是将就。
+        if (Float.isNaN(at)) throw new Buf.Invalid("lastHitAt is NaN");
+        if (h < 0 || p < 0 || h > p) throw new Buf.Invalid("combo hits " + h + " vs peak " + p);
+        lastHitAt = at;
+        hits = h;
+        peak = p;
+    }
 }

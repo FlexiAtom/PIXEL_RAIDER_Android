@@ -62,4 +62,26 @@ public final class HitStop {
         float k = severity01 < 0f ? 0f : (severity01 > 1f ? 1f : severity01);
         return Balance.overload.hitStopMin + (Balance.overload.hitStopMax - Balance.overload.hitStopMin) * k;
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下"还差多少秒定格"。这一段短到 30–50ms，看着不值得存，但它决定恢复后**第一帧的步长**：
+     * {@link #worldSecondsFor} 会把这一帧的世界时间整段吃掉，不还原就等于凭空多走 1/60 秒的世界，
+     * 而快照的全部意义是"从按下那一格继续"。
+     *
+     * <p>它同时是<b>两把尺</b>之一：定格期间 {@code world} 不走、表现时钟照走，所以这一格与
+     * {@code Game.world} 是一对，缺一个就会出现"定格还没结束而世界已经推进完"的错位。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeFloat(remaining);
+    }
+
+    public void restoreSnapshot(Buf.Reader r) {
+        float left = r.readFloat();
+        if (left < 0f || left > Balance.overload.hitStopMax * 2f) {
+            throw new Buf.Invalid("hit-stop remaining " + left + " outside 0.." + Balance.overload.hitStopMax * 2f);
+        }
+        remaining = left;
+    }
 }

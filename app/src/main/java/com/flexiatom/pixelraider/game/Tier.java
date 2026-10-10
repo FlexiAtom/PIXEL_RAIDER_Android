@@ -71,4 +71,25 @@ public final class Tier {
     public static final Tier NORMAL = new Tier(1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 2);
     /** [规格 §8.2] 终结：hp 1.75 × count 1.34 ＝ 波总血量 2.35 倍封顶（审查打掉的 2.20 × 1.55 那一档会到 3.4 倍）。 */
     public static final Tier TERMINAL = new Tier(1.75f, 1.34f, 1.30f, 0.75f, 0.86f, 6);
+
+    /**
+     * 档号 → 档，序＝上面三格的声明序（休闲 0／普通 1／终结 2）。
+     *
+     * <p>它是 {@code SaveSlots.tierOrdinal} 的<b>唯一逆映射</b>：那枚 2 位段的打包与解包各只有一处，
+     * 读档侧不必再手写一串 {@code if}（那种副本是"槽位列表写着终结档、局内跑普通档"的来源）。
+     *
+     * <p>越界（两位段装得下 3）夹到 {@link #NORMAL} 而不是抛：这一格的输入是<b>盘上的旧数</b>，为一个
+     * 显示用的位段把整次读档炸掉不划算。夹成基线的后果是"这局按普通档跑"——玩家看得见，也解释得清。
+     */
+    public static Tier at(int ordinal) {
+        if (ordinal == 0) return CASUAL;
+        if (ordinal == 2) return TERMINAL;
+        return NORMAL;
+    }
+
+    /** {@link #at} 的另一向。两格同住本类是为了让"声明序"只有一个地方在数（{@code SaveSlots} 的位段读它）。 */
+    public static int ordinalOf(Tier tier) {
+        if (tier == CASUAL) return 0;
+        return tier == TERMINAL ? 2 : 1;
+    }
 }

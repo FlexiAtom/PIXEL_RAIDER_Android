@@ -238,4 +238,35 @@ public final class StatusLayers {
             default: return "";
         }
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 只拍<b>拾取层那一格与它的余量</b>。
+     *
+     * <p>{@code envKind} <b>故意不存也不读</b>：它每帧由 {@code Game.step} 从
+     * {@code StatusLayers.envForZone(wave.zoneIndex())} 现算（类注释那条"纯函数实时算，不存变量"），
+     * 而波号在波次流那一段里已经存了。存进快照就是给它第二个真源——两份不一致时，环境乘子会跟着
+     * 快照走而 HUD 上印着波次那一条跟着波号走，玩家看到的是"写着磁暴、打着无惩罚"。
+     * 还原时把它压回 {@link #ENV_NONE} 也不需要：下一帧那一行 {@code setEnvironment} 自己会盖对。
+     *
+     * <p>{@code everUsed} 同样不存：它是 {@link #activate} 单向置真的观测格，全仓只有单测读它
+     * （那句"教学与图鉴读它"目前还没有生产者侧的读取点），读档后从当前时刻重新记不影响任何判定。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeInt(pickupKind);
+        w.writeFloat(pickupRemaining);
+    }
+
+    public void restoreSnapshot(Buf.Reader r) {
+        int kind = r.readInt();
+        float left = r.readFloat();
+        if (kind != NONE && (kind < 0 || kind >= PICKUP_COUNT)) {
+            throw new Buf.Invalid("pickup kind " + kind + " out of range");
+        }
+        // 只有"没有生效层"才允许余量为 0；反过来 kind 有值而余量非正，就是那种已经过期却还挂着图标的状态。
+        if (left < 0f || (kind == NONE && left != 0f)) throw new Buf.Invalid("pickup remaining " + left);
+        pickupKind = kind;
+        pickupRemaining = left;
+    }
 }

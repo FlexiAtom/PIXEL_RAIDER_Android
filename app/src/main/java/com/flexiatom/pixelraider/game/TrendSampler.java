@@ -107,4 +107,48 @@ public final class TrendSampler {
         int s = head - count + i;
         return s < 0 ? s + CAP : (s >= CAP ? s - CAP : s);
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 环形缓冲按<b>物理槽位</b>整拍（{@code 0..CAP-1} 三张表各 24 格），不是按"自旧到新"的顺序。
+     * 理由有两条：读端 {@link #slot} 的换算是 {@code head - count + i} 一格定的，存顺序就得在还原端
+     * 反向重排一遍——那是同一道换算的第二份实现；而物理槽位整拍只需要把 {@code head}/{@code count}
+     * 两个数摆回原位，形状自己就对了。
+     *
+     * <p>这张表是暂停面板折线图的数据源，属于"丢了只影响一块图"的那一类，但它只有 24 帧、
+     * 三个数组共 24×(4+8+4)=384 字节，比给读档加一条"这一页可能是空的"的分支便宜。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeInt(count);
+        w.writeInt(head);
+        w.writeFloat(since);
+        w.writeInts(kills, 0, CAP);
+        for (long v : score) w.writeLong(v);
+        for (float v : hp) w.writeFloat(v);
+    }
+
+    public void restoreSnapshot(Buf.Reader r) {
+        int n = r.readInt();
+        int h = r.readInt();
+        float s = r.readFloat();
+        int[] k = new int[CAP];
+        long[] sc = new long[CAP];
+        float[] hpIn = new float[CAP];
+        r.readInts(k, 0, CAP);
+        for (int i = 0; i < CAP; i++) sc[i] = r.readLong();
+        for (int i = 0; i < CAP; i++) hpIn[i] = r.readFloat();
+        if (n < 0 || n > CAP) throw new Buf.Invalid("trend frames " + n + " over CAP " + CAP);
+        if (h < 0 || h >= CAP) throw new Buf.Invalid("trend head " + h + " outside 0.." + (CAP - 1));
+        if (Float.isNaN(s) || s < 0f || s >= INTERVAL_SEC * 60f) throw new Buf.Invalid("trend since " + s);
+        for (float v : hpIn) {
+            if (Float.isNaN(v) || v < 0f || v > 1.5f) throw new Buf.Invalid("hp ratio sample " + v);
+        }
+        System.arraycopy(k, 0, kills, 0, CAP);
+        System.arraycopy(sc, 0, score, 0, CAP);
+        System.arraycopy(hpIn, 0, hp, 0, CAP);
+        count = n;
+        head = h;
+        since = s;
+    }
 }

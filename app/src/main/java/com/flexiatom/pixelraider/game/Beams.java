@@ -140,4 +140,72 @@ public final class Beams {
         cursor = 0;
         count = 0;
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下环形窗口：<b>{@code cursor} 与 {@code count} 一起存，窗口按 {@link #at(int)} 的顺序（最老→最新）写</b>。
+     *
+     * <p>这一座与其余五座<b>不同形</b>：没有 free 栈，槽位是被游标覆盖的，所以还原不能"重放 spawn"
+     * （{@link Beam#occupy} 会把 {@code settled} 强行写成 false，而快照里那道可能已经结过账）。
+     * 于是这里<b>逐字段直写</b>，把 {@code settled} 一起带走——漏掉它，恢复后的第一帧就会把已经
+     * 结过的那一束再结一遍（类注释那条 ⚠ 说的是同一件事，只是换了触发点）。
+     *
+     * <p>窗口之外的那些槽<b>不存</b>：{@link #at(int)} 走不到它们。{@link #restoreSnapshot} 开头那句
+     * {@link #clear()} 会把它们的 {@code life}/{@code settled} 归位（归位不是为了正确性，是为了游标
+     * 转过来之前那几格不留旧值）——等游标覆盖时 {@code occupy} 会把九个字段全写一遍，所以这里
+     * 少存哪一格都不影响读数。
+     */
+    public void writeSnapshot(Buf w, int bandTop, int bandH) {
+        w.writeInt(cursor);
+        w.writeInt(count);
+        for (int i = 0; i < count; i++) writeBeam(w, at(i), bandTop, bandH);
+    }
+
+    public void restoreSnapshot(Buf.Reader r, int bandTop, int bandH) {
+        int c = r.readInt();
+        int n = r.readInt();
+        if (c < 0 || c >= slots.length) throw new Buf.Invalid("beam cursor " + c + " out of " + slots.length);
+        if (n < 0 || n > slots.length) throw new Buf.Invalid("beam count " + n + " out of " + slots.length);
+        clear();
+        for (int i = 0; i < n; i++) readBeam(r, atWriteTarget(c, n, i), bandTop, bandH);
+        cursor = c;
+        count = n;
+    }
+
+    /** 与 {@link #at(int)} 严格同一道换算：读第 i 道就该落在它当初所在的位置上。 */
+    private Beam atWriteTarget(int restoredCursor, int restoredCount, int i) {
+        int idx = restoredCursor - restoredCount + i;
+        if (idx < 0) idx += slots.length;
+        if (idx < 0 || idx >= slots.length) throw new Buf.Invalid("beam window index " + idx);
+        return slots[idx];
+    }
+
+    /**
+     * {@link Beam#y} 走 {@link Snapshot} 的战场带归一化——它是机头那一刻的 y，而玩家那段也按同一条
+     * 规则存。两边不同进的话，跨机型读出的第一帧会出现"一道光束和战机差了半屏"的画面。
+     */
+    private static void writeBeam(Buf w, Beam b, int bandTop, int bandH) {
+        w.writeFloat(b.x);
+        Snapshot.putY(w, b.y, bandTop, bandH);
+        w.writeFloat(b.width);
+        w.writeFloat(b.damage);
+        w.writeInt(b.color);
+        w.writeInt(b.weaponId);
+        w.writeBoolean(b.crit);
+        w.writeFloat(b.life);
+        w.writeBoolean(b.settled);
+    }
+
+    private static void readBeam(Buf.Reader r, Beam b, int bandTop, int bandH) {
+        b.x = r.readFloat();
+        b.y = Snapshot.getY(r, bandTop, bandH);
+        b.width = r.readFloat();
+        b.damage = r.readFloat();
+        b.color = r.readInt();
+        b.weaponId = r.readInt();
+        b.crit = r.readBoolean();
+        b.life = r.readFloat();
+        b.settled = r.readBoolean();
+    }
 }

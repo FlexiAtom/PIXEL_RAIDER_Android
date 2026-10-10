@@ -158,6 +158,68 @@ public final class Drops {
         while (activeCount > 0) killAt(activeCount - 1);
     }
 
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下屏幕上还没捡走的那几枚。掉落物是这一局<b>已经掉出来、还没进兜</b>的东西：
+     * 不存它们，读档后玩家会白捡一批"上次明明看见掉了"的芯片——那种损失比多几枚金币更让人不信档。
+     *
+     * <p>没有任何计数要存：这一座的 {@code spawnTotal}/{@code reuseTotal} 全仓没有读取点，
+     * 而掉落物<b>没有代次戳</b>（没人长期持有"哪一枚"，吸走或捡走都是当场决定）。
+     */
+    public void writeSnapshot(Buf w, int bandTop, int bandH) {
+        w.writeInt(activeCount);
+        w.writeInts(active, 0, activeCount);
+        for (int i = 0; i < activeCount; i++) writeItem(w, objs[active[i]], bandTop, bandH);
+    }
+
+    public void restoreSnapshot(Buf.Reader r, int bandTop, int bandH) {
+        int n = r.readInt();
+        if (n < 0 || n > objs.length) {
+            throw new Buf.Invalid("drop count " + n + " vs capacity " + objs.length);
+        }
+        int[] slots = new int[n];
+        r.readInts(slots, 0, n);
+        clear();
+        for (int i = 0; i < n; i++) {
+            int s = slots[i];
+            if (s < 0 || s >= objs.length) throw new Buf.Invalid("drop slot " + s + " out of " + objs.length);
+            if (slotOfObj[s] >= 0) throw new Buf.Invalid("drop slot " + s + " listed twice");
+            slotOfObj[s] = i;
+            active[i] = s;
+        }
+        activeCount = n;
+        freeCount = 0;
+        for (int s = objs.length - 1; s >= 0; s--) {
+            if (slotOfObj[s] < 0) free[freeCount++] = s;
+        }
+        for (int i = 0; i < n; i++) readItem(r, objs[active[i]], bandTop, bandH);
+    }
+
+    private static void writeItem(Buf w, Item it, int bandTop, int bandH) {
+        w.writeInt(it.kind);
+        w.writeInt(it.value);
+        w.writeFloat(it.x);
+        Snapshot.putY(w, it.y, bandTop, bandH);
+        w.writeFloat(it.px);
+        Snapshot.putY(w, it.py, bandTop, bandH);
+        w.writeFloat(it.vy);
+        w.writeFloat(it.age);
+        w.writeBoolean(it.magnetized);
+    }
+
+    private static void readItem(Buf.Reader r, Item it, int bandTop, int bandH) {
+        it.kind = r.readInt();
+        it.value = r.readInt();
+        it.x = r.readFloat();
+        it.y = Snapshot.getY(r, bandTop, bandH);
+        it.px = r.readFloat();
+        it.py = Snapshot.getY(r, bandTop, bandH);
+        it.vy = r.readFloat();
+        it.age = r.readFloat();
+        it.magnetized = r.readBoolean();
+    }
+
     // ---- 掉落判定（纯函数，测试直接钉） ---------------------------------------------------
 
     public static final float DROP_FALL = 34f;

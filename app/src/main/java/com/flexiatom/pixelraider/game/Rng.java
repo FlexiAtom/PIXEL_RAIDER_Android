@@ -75,4 +75,24 @@ public final class Rng {
         if (p >= 1f) return true;
         return next01() < p;
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 整份状态就是那一枚 long，所以这一段是<b>整局可复现性的根</b>：掉落抽样、武器权重、波次组合
+     * 全读它（类注释第一条）。不存它的后果不是"随机数不对"，而是商店货架那种派生量<b>抽不回
+     * 同一份</b>——{@code Snapshot} 那句"货架不存，开架时现抽"整条理由都站在这格上。
+     *
+     * <p>{@code Game.rng} 与 {@code WaveFlow.rng} 是**同一个实例**（构造时传引用），所以全局只需一段；
+     * 任何"状态 long 之外的种子"都不存在，也没有可还原错的东西。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeLong(state);
+    }
+
+    public void restoreSnapshot(Buf.Reader r) {
+        // 任何 long 都是合法状态（splitmix64 不做 seed 归一化），所以这里没有范围可验——
+        // 这一格连"错位探针"都当不了，探针的活由 Buf 的布尔与段尾的一口不剩两条干。
+        state = r.readLong();
+    }
 }

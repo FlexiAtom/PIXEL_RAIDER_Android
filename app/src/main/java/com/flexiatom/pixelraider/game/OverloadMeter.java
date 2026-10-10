@@ -80,4 +80,28 @@ public final class OverloadMeter {
     public void forceCooling(float seconds) {
         remaining = seconds < 0f ? 0f : seconds;
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 只这一格。它决定读档后"超载还能不能立刻再按"——那条 30 秒冷却是这个机制唯一的规划依据
+     * （类注释：可预期的战略资源，倒计时读得出来才知道这一波撑不撑得到转好），丢了它就等于
+     * 白送一次释放，而玩家看得见环是空的。
+     *
+     * <p>{@code charge01()} 现算，不存：它是 {@code remaining} 除以**当期**冷却时长，存了就会在
+     * 有人调 {@link Balance#overload} 之后给出两个不同的环。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeFloat(remaining);
+    }
+
+    public void restoreSnapshot(Buf.Reader r) {
+        float left = r.readFloat();
+        // 负值与 ready() 的判据是 `<= 0f`，读进来一个负数不会报错，只会让环算出 1.x 的进度。
+        // 上界给到冷却的 4 倍：那已经是"这台机器调了个离谱数值"或者字节错位，两种都不该进局。
+        if (left < 0f || left > cooldown() * 4f) {
+            throw new Buf.Invalid("overload remaining " + left + " outside 0.." + cooldown() * 4f);
+        }
+        remaining = left;
+    }
 }

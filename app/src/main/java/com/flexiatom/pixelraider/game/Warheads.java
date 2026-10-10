@@ -179,4 +179,79 @@ public final class Warheads {
     public void clear() {
         while (activeCount > 0) killAt(activeCount - 1);
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下在场的那几段（杆与碎片共用一张表，所以一段快照两种几何都带走）。
+     *
+     * <p>{@link Warhead#contact} 那位图<b>原样存</b>：它是"每步采样"与"每 tick 计费"之间唯一的桥，
+     * 清零会让一根正在切过敌机的亮线少结一次伤害。位号是敌 obj 槽号，槽号本身随敌人那段一起还原，
+     * 于是这一格不需要任何跨池校验（构造期那条 ≤32 的断言已经保证位号装得下）。
+     */
+    public void writeSnapshot(Buf w, int bandTop, int bandH) {
+        w.writeInt(activeCount);
+        w.writeInts(active, 0, activeCount);
+        for (int i = 0; i < activeCount; i++) writeWarhead(w, objs[active[i]], bandTop, bandH);
+    }
+
+    public void restoreSnapshot(Buf.Reader r, int bandTop, int bandH) {
+        int n = r.readInt();
+        if (n < 0 || n > objs.length) {
+            throw new Buf.Invalid("warhead count " + n + " vs capacity " + objs.length);
+        }
+        int[] slots = new int[n];
+        r.readInts(slots, 0, n);
+        clear();
+        boolean[] seen = new boolean[objs.length];
+        for (int i = 0; i < n; i++) {
+            int s = slots[i];
+            if (s < 0 || s >= objs.length) throw new Buf.Invalid("warhead slot " + s + " out of " + objs.length);
+            if (seen[s]) throw new Buf.Invalid("warhead slot " + s + " listed twice");
+            seen[s] = true;
+            active[i] = s;
+        }
+        activeCount = n;
+        for (int i = objs.length - 1, k = 0; i >= 0; i--) {
+            if (!seen[i]) free[k++] = i;
+        }
+        freeCount = objs.length - n;
+        for (int i = 0; i < n; i++) readWarhead(r, objs[active[i]], bandTop, bandH);
+    }
+
+    private static void writeWarhead(Buf w, Warhead h, int bandTop, int bandH) {
+        w.writeInt(h.kind);
+        w.writeFloat(h.x);
+        Snapshot.putY(w, h.y, bandTop, bandH);
+        w.writeFloat(h.px);
+        Snapshot.putY(w, h.py, bandTop, bandH);
+        w.writeFloat(h.vx);
+        w.writeFloat(h.vy);
+        w.writeInt(h.damage);
+        w.writeFloat(h.size);
+        w.writeInt(h.color);
+        w.writeFloat(h.life);
+        w.writeFloat(h.maxLife);
+        w.writeFloat(h.tickAcc);
+        w.writeBoolean(h.crit);
+        w.writeInt(h.contact);
+    }
+
+    private static void readWarhead(Buf.Reader r, Warhead h, int bandTop, int bandH) {
+        h.kind = r.readInt();
+        h.x = r.readFloat();
+        h.y = Snapshot.getY(r, bandTop, bandH);
+        h.px = r.readFloat();
+        h.py = Snapshot.getY(r, bandTop, bandH);
+        h.vx = r.readFloat();
+        h.vy = r.readFloat();
+        h.damage = r.readInt();
+        h.size = r.readFloat();
+        h.color = r.readInt();
+        h.life = r.readFloat();
+        h.maxLife = r.readFloat();
+        h.tickAcc = r.readFloat();
+        h.crit = r.readBoolean();
+        h.contact = r.readInt();
+    }
 }

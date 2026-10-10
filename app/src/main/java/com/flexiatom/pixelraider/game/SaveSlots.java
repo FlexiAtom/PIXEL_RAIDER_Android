@@ -167,7 +167,7 @@ public final class SaveSlots {
      */
     public static long packMeta(Mode mode, int chapter, int wave, int score) {
         long m = mode.campaign ? 1L : 0L;
-        m |= (long) tierOrdinal(mode.tier) << SHIFT_TIER;
+        m |= (long) Tier.ordinalOf(mode.tier) << SHIFT_TIER;
         m |= (long) clamp(chapter, 0, (1 << BITS_CHAPTER) - 1) << SHIFT_CHAPTER;
         m |= (long) clamp(wave, 0, (1 << BITS_WAVE) - 1) << SHIFT_WAVE;
         m |= (score & 0xFFFFFFFFL) << SHIFT_SCORE;
@@ -198,12 +198,7 @@ public final class SaveSlots {
         return (int) (packed >>> SHIFT_SCORE);
     }
 
-    /** 档的序号：与 {@link Tier} 声明序一致（休闲 0／普通 1／终结 2）。 */
-    private static int tierOrdinal(Tier tier) {
-        if (tier == Tier.CASUAL) return 0;
-        return tier == Tier.TERMINAL ? 2 : 1;
-    }
-
+    /** 档的序号住在 {@link Tier#ordinalOf}（两向同处，声明序只有一处在数）。 */
     private static int clamp(int v, int lo, int hi) {
         return v < lo ? lo : (v > hi ? hi : v);
     }

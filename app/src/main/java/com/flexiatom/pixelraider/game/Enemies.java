@@ -202,6 +202,114 @@ public final class Enemies {
         while (activeCount > 0) killAt(activeCount - 1);
     }
 
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下场上每一只敌人：<b>活跃表原样（obj 槽号序列）+ 每只 22 个读数 + 代次戳的来源</b>。
+     *
+     * <p>槽号序列必须原样存，不能只存"这些只敌人"：{@code Missiles} 那两侧导引头持的是
+     * <b>(obj 槽号, born)</b> 一对，槽号换了目标就断（{@link Enemy#born} 那条）。
+     * {@code free}/{@code slotOfObj}/{@code everUsed} 都是这张表的派生物，restore 端重建。
+     */
+    public void writeSnapshot(Buf w, int bandTop, int bandH) {
+        w.writeInt(activeCount);
+        w.writeInts(active, 0, activeCount);
+        w.writeLong(spawnTotal);
+        for (int i = 0; i < activeCount; i++) writeEnemy(w, objs[active[i]], bandTop, bandH);
+    }
+
+    /**
+     * 还原：先验槽号（范围 + 不重复），再落表。<b>验不过就整段抛</b>，不留半张表——
+     * {@code spawnTotal} 与 {@code born} 的对应一旦错位，导引武器会安静地追着另一只敌人飞，
+     * 那种 bug 画面上看不出来，只有分数会解释不了。
+     */
+    public void restoreSnapshot(Buf.Reader r, int bandTop, int bandH) {
+        int n = r.readInt();
+        if (n < 0 || n > objs.length) throw new Buf.Invalid("enemy count " + n + " vs capacity " + objs.length);
+        int[] slots = new int[n];
+        r.readInts(slots, 0, n);
+        clear();
+        for (int i = 0; i < n; i++) {
+            int s = slots[i];
+            if (s < 0 || s >= objs.length) throw new Buf.Invalid("enemy slot " + s + " out of " + objs.length);
+            if (slotOfObj[s] >= 0) throw new Buf.Invalid("enemy slot " + s + " listed twice");
+            slotOfObj[s] = i;
+            active[i] = s;
+        }
+        activeCount = n;
+        rebuildFreeStack();
+        spawnTotal = r.readLong();
+        for (int i = 0; i < n; i++) readEnemy(r, objs[active[i]], bandTop, bandH);
+        if (spawnTotal < 0L) throw new Buf.Invalid("negative spawnTotal: " + spawnTotal);
+        for (int i = 0; i < n; i++) {
+            long b = objs[active[i]].born;
+            if (b <= 0L || b > spawnTotal) throw new Buf.Invalid("enemy born " + b + " vs spawnTotal " + spawnTotal);
+        }
+    }
+
+    /** 写入顺序与读取顺序必须逐项一致（{@link Snapshot} 那句"两处各写一遍是最大失真风险"就在这儿）。 */
+    private static void writeEnemy(Buf w, Enemy e, int bandTop, int bandH) {
+        w.writeInt(e.kind);
+        w.writeBoolean(e.boss);
+        w.writeFloat(e.phase2AtRatio);
+        w.writeBoolean(e.phase2);
+        w.writeInt(e.hp);
+        w.writeInt(e.maxHp);
+        w.writeFloat(e.x);
+        Snapshot.putY(w, e.y, bandTop, bandH);
+        w.writeFloat(e.vx);
+        w.writeFloat(e.vy);
+        w.writeFloat(e.px);
+        Snapshot.putY(w, e.py, bandTop, bandH);
+        w.writeFloat(e.radius);
+        w.writeFloat(e.age);
+        w.writeFloat(e.anchorX);
+        w.writeFloat(e.phase);
+        w.writeFloat(e.fireTimer);
+        w.writeFloat(e.hitFlash);
+        w.writeBoolean(e.locked);
+        w.writeInt(e.score);
+        w.writeFloat(e.enter);
+        w.writeLong(e.born);
+    }
+
+    private static void readEnemy(Buf.Reader r, Enemy e, int bandTop, int bandH) {
+        e.kind = r.readInt();
+        e.boss = r.readBoolean();
+        e.phase2AtRatio = r.readFloat();
+        e.phase2 = r.readBoolean();
+        e.hp = r.readInt();
+        e.maxHp = r.readInt();
+        e.x = r.readFloat();
+        e.y = Snapshot.getY(r, bandTop, bandH);
+        e.vx = r.readFloat();
+        e.vy = r.readFloat();
+        e.px = r.readFloat();
+        e.py = Snapshot.getY(r, bandTop, bandH);
+        e.radius = r.readFloat();
+        e.age = r.readFloat();
+        e.anchorX = r.readFloat();
+        e.phase = r.readFloat();
+        e.fireTimer = r.readFloat();
+        e.hitFlash = r.readFloat();
+        e.locked = r.readBoolean();
+        e.score = r.readInt();
+        e.enter = r.readFloat();
+        e.born = r.readLong();
+    }
+
+    /**
+     * 用当前活跃表重建空闲栈，形状与构造期一致（{@code free[i] = capacity-1-i} ⇒ 弹出顺序由低到高）。
+     * 弹出顺序本身没有玩法含义，但<b>让 restore 之后的池与新建的池同形</b>，省掉一类
+     * "读档后行为与fresh局不同"的差异没法解释。
+     */
+    private void rebuildFreeStack() {
+        freeCount = 0;
+        for (int s = objs.length - 1; s >= 0; s--) {
+            if (slotOfObj[s] < 0) free[freeCount++] = s;
+        }
+    }
+
     /** 场上存活且未死亡的总数——波次进度条与"清场判定"都读这个。 */
     public int aliveCount() {
         int n = 0;

@@ -38,7 +38,11 @@ public final class RunStats {
     public long powerupsTaken;
     /** 死亡次数（重生一次算一次），生存维度按它扣分。 */
     public int deaths;
-    /** 本局最高连击，来自 {@link ComboMeter#peakHits()}，在 reset 时快照。 */
+    /**
+     * 本局最高连击。除 {@link #reset()} 归零外，写点只有一处：{@code Game.killEnemy} 在每次击杀后
+     * 把它抬到不低于 {@link ComboMeter#peakHits()}（那里那句注释解释了为什么必须逐次记、不能只在
+     * 死亡瞬间快照）。读取点（评级、结算、暂停面板）一律读这里，因为这里正是结算页的输入。
+     */
     public int peakCombo;
     /** 存活的世界秒数（不是真实秒数：暂停与定格不该算进时长）。 */
     public float worldSeconds;
@@ -76,5 +80,59 @@ public final class RunStats {
     /** 存活分钟秒串的数据源（显示端自己格式化，这里只给算术）。 */
     public int elapsedWholeSeconds() {
         return (int) worldSeconds;
+    }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 十格原始计数全存。读档继续打的局，结算页拿到的是<b>整局</b>的命中率与最高连击——
+     * 丢了它们，"存档→读档→打死"这一条路会给出一个 0% 命中率的评级，而那正是本类注释
+     * 当初要解决的病（拿 0 去评级）。
+     *
+     * <p>{@code peakCombo} 是这一格的一处<b>双份</b>：连击计里也有一个峰值，两处由
+     * {@code Game.killEnemy} 同一句里前后写。这里不校验两者相等，因为它要的是"结算页的输入
+     * 与暂停面板同源"，不是"跨类对齐"——校验得让两处都住进同一个对象才有意义，那是另一件事。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeLong(shotsFired);
+        w.writeLong(shotsHit);
+        w.writeLong(kills);
+        w.writeLong(critKills);
+        w.writeLong(bombUses);
+        w.writeLong(overloadUses);
+        w.writeLong(powerupsTaken);
+        w.writeInt(deaths);
+        w.writeInt(peakCombo);
+        w.writeFloat(worldSeconds);
+    }
+
+    public void restoreSnapshot(Buf.Reader r) {
+        long fired = r.readLong();
+        long hit = r.readLong();
+        long kill = r.readLong();
+        long critKill = r.readLong();
+        long bomb = r.readLong();
+        long over = r.readLong();
+        long powerup = r.readLong();
+        int d = r.readInt();
+        int peak = r.readInt();
+        float secs = r.readFloat();
+        // 三条"子集不超过全集"：命中不可能多于发出、暴杀不可能多于击杀——它们不是洁癖，
+        // 评级与结算页那几行读数全靠这些数<b>彼此自洽</b>，错位半格就会给出一个 130% 的命中率
+        // （accuracy() 自己钳不住，它只除）。
+        if (fired < 0 || hit < 0 || hit > fired) throw new Buf.Invalid("shots " + hit + "/" + fired);
+        if (kill < 0 || critKill < 0 || critKill > kill) throw new Buf.Invalid("crit kills " + critKill + "/" + kill);
+        if (bomb < 0 || over < 0 || powerup < 0 || d < 0 || peak < 0) throw new Buf.Invalid("negative event counters");
+        if (Float.isNaN(secs) || secs < 0f) throw new Buf.Invalid("worldSeconds " + secs);
+        shotsFired = fired;
+        shotsHit = hit;
+        kills = kill;
+        critKills = critKill;
+        bombUses = bomb;
+        overloadUses = over;
+        powerupsTaken = powerup;
+        deaths = d;
+        peakCombo = peak;
+        worldSeconds = secs;
     }
 }

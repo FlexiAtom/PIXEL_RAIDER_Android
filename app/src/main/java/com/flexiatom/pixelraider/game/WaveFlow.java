@@ -334,4 +334,77 @@ public final class WaveFlow {
         guaranteeChips = 0;
         return n;
     }
+
+    // ---- 快照 -----------------------------------------------------------------------------
+
+    /**
+     * 拍下<b>波号、相位、两段计时、待刷队列与那一格没消费的退回标记</b>。
+     *
+     * <p>队列必须连<b>游标</b>一起存，不能只存"还剩几只"：{@link #nextGap} 的批次判据读的是
+     * {@code cursor % size}，那是一格**绝对位置**，把它换成"剩余数"会让无尽模式读档后的第一批
+     * 落在错误的节拍上（批次只在整除那一拍付间隔）。
+     *
+     * <p>{@code armed} 也存，理由写在 {@link #returnSpawn} 那条上：它是"上一帧真的吐出了一只"的
+     * 一次性标记。存档恰好拍在池满退回的前一帧时，丢了它下一帧就退不回那一只；不丢则最多退一次。
+     */
+    public void writeSnapshot(Buf w) {
+        w.writeInt(wave);
+        w.writeInt(phase);
+        w.writeFloat(phaseLeft);
+        w.writeFloat(gapLeft);
+        w.writeInt(kindCount);
+        w.writeInts(kinds, 0, kindCount);
+        w.writeInt(cursor);
+        w.writeBoolean(chipDroppedThisWave);
+        w.writeInt(guaranteeChips);
+        w.writeBoolean(armed);
+    }
+
+    /**
+     * 队列的每个元素都要验：它是这份快照里<b>唯一会决定"接下来刷出什么"</b>的一段，而
+     * {@code Game.spawnQueued} 拿到非法 kind 不会抛——它会去读 {@code Balance.enemies[kind]}
+     * 那一族数值，越界就是数组外，不越界但坏了就是一整波打不了的怪。
+     */
+    public void restoreSnapshot(Buf.Reader r) {
+        int n = r.readInt();
+        int ph = r.readInt();
+        float pl = r.readFloat();
+        float gl = r.readFloat();
+        int count = r.readInt();
+        if (n < 1) throw new Buf.Invalid("wave " + n + " below 1");
+        if (ph < PREP || ph > VICTORY) throw new Buf.Invalid("phase " + ph + " outside 0.." + VICTORY);
+        if (Float.isNaN(pl) || Float.isInfinite(pl) || pl < -1f || pl > 600f) {
+            throw new Buf.Invalid("phaseLeft " + pl);
+        }
+        if (Float.isNaN(gl) || Float.isInfinite(gl) || gl < -1f || gl > 600f) {
+            throw new Buf.Invalid("gapLeft " + gl);
+        }
+        // 上限不是随手写的：enemyCountFor 自己把整波数夹在 400，Boss 波只有 1，所以合法队列最长 400。
+        // 越过这条只有两种可能——布局错位，或那一段被改坏；两种都不该进一局。
+        if (count < 0 || count > 400) throw new Buf.Invalid("queue length " + count + " over the 400 cap");
+        int[] q = new int[count];
+        r.readInts(q, 0, count);
+        int cur = r.readInt();
+        boolean chip = r.readBoolean();
+        int chips = r.readInt();
+        boolean wasArmed = r.readBoolean();
+        if (cur < 0 || cur > count) throw new Buf.Invalid("cursor " + cur + " outside 0.." + count);
+        if (chips < 0) throw new Buf.Invalid("guaranteeChips " + chips);
+        for (int k : q) {
+            if (k != BOSS && (k < Balance.Enemy.STRAIGHT || k > Balance.Enemy.BURSTER)) {
+                throw new Buf.Invalid("queued kind " + k + " is neither a enemy nor BOSS");
+            }
+        }
+        ensure(count);
+        System.arraycopy(q, 0, kinds, 0, count);
+        wave = n;
+        phase = ph;
+        phaseLeft = pl;
+        gapLeft = gl;
+        kindCount = count;
+        cursor = cur;
+        chipDroppedThisWave = chip;
+        guaranteeChips = chips;
+        armed = wasArmed;
+    }
 }
