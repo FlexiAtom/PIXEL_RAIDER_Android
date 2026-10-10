@@ -43,6 +43,7 @@ import com.flexiatom.pixelraider.gfx.ParticlePool.Particle;
 import com.flexiatom.pixelraider.gfx.SpriteFactory;
 import com.flexiatom.pixelraider.gfx.SpriteSheets;
 import com.flexiatom.pixelraider.gfx.TextCache;
+import com.flexiatom.pixelraider.plat.AsyncSaveSink;
 import com.flexiatom.pixelraider.plat.KeyValue;
 import com.flexiatom.pixelraider.plat.QualityProfile;
 import com.flexiatom.pixelraider.plat.Screen;
@@ -346,6 +347,17 @@ public final class Game implements GameThread.Host {
     private final ResultSheet sheet = new ResultSheet();
     /** 落盘出口。渲染线程拿不到 Context，由 plat 在启动时注入（规格 §八 的边界）。 */
     private KeyValue store = KeyValue.EMPTY;
+    /**
+     * 存档槽位账本（哪些槽有档＋列表页那几枚标量）。它是"这一槽有没有档"的<b>唯一真源</b>：
+     * 存档页画两形读这里，不去问介质（问就是渲染线程 {@code File.exists()}）。
+     */
+    private final SaveSlots saveSlots = new SaveSlots();
+    /**
+     * 存档字节的线程层出口，与 {@link #store} 同一条注入边界、由 plat 在启动时给。
+     * <b>可以为 null</b>——没注入就是"这台机器还没给存档通路"，那两格入口按不可用画
+     * （不静默降级成"存进内存、下次开机就没了"，那是 {@code KeyValue.EMPTY} 那条口径明确否掉的假象）。
+     */
+    private AsyncSaveSink saveSink;
     /** 一局结束（死亡或通关）那一刻的界面时间：结算页的分阶段揭示以它为原点。 */
     private float resultAtUi;
     /** 拉开暂停那一刻的界面时间：入场动画与"淡完才可点"以它为原点（规格 §五 uiTime）。 */
@@ -421,6 +433,26 @@ public final class Game implements GameThread.Host {
         store = kv == null ? KeyValue.EMPTY : kv;
         records.load(store);
         growth.readFrom(store);
+        saveSlots.readFrom(store);
+    }
+
+    /**
+     * 注入存档字节的线程层出口（{@code plat/AsyncSaveSink}）。与 {@link #attachStore} 同一条边界、
+     * 同一次时机：surface 建立之前。传 null 等于宣告这台机器没有存档通路——那两格入口按不可用画，
+     * 不降级成"写进内存、下次开机就没了"。
+     */
+    public void attachSave(AsyncSaveSink sink) {
+        saveSink = sink;
+    }
+
+    /** 槽位账本（只读用途给界面；写只走 {@link SaveSlots#occupy} 与 {@link SaveSlots#release}）。 */
+    public SaveSlots saveSlots() {
+        return saveSlots;
+    }
+
+    /** 存档通路是否可用。null 出口不是错误状态，是"没注入"，界面据此画不可用那一形。 */
+    public boolean saveAvailable() {
+        return saveSink != null;
     }
 
     /**

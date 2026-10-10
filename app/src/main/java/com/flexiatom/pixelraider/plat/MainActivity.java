@@ -38,6 +38,8 @@ import com.flexiatom.pixelraider.core.InputRouter;
 import com.flexiatom.pixelraider.game.Game;
 import com.flexiatom.pixelraider.gfx.TextCache;
 
+import java.io.File;
+
 /**
  * 单 Activity（规格 §零）。主线程只做两件事：把输入事件投进队列、维护窗口与安全区。
  * 游戏状态一律在渲染线程读写，不加锁（§八）。
@@ -60,6 +62,13 @@ public final class MainActivity extends ComponentActivity {
     private AudioEngine engine;
     /** 落盘出口要留着，销毁时才能等它把挂起的写做完（规格 §八 的单线程池）。 */
     private AsyncKeyValue store;
+    /**
+     * 存档字节的出口（{@code filesDir/saves/v<格式版本>/{槽}.bin}）。它与 {@link #store} 是两条独立的
+     * 通路，不是一条接口的两种用法——一份快照是几万字节的二进制，还要能被删掉，那两件事
+     * {@link KeyValue} 的三方法接口根本表达不出来（理由全文见 {@link SaveSink}；至于"哪些槽有档"，
+     * 那里不枚举目录，由 {@code game} 侧那枚槽位掩码回答）。
+     */
+    private AsyncSaveSink saves;
     /** 只有 debug 包带作弊键（F9 立即结算），release 包里这个键不拦截、照常交给系统。 */
     private boolean debugKeys;
 
@@ -74,6 +83,11 @@ public final class MainActivity extends ComponentActivity {
         store = new AsyncKeyValue(new SharedPrefs(
                 getSharedPreferences("pixel_raider", Context.MODE_PRIVATE)));
         game.attachStore(store);
+        // 存档通路：目录名带格式版本（照 audio/AudioEngine 那个 "audio/v"+GEN_VERSION），
+        // 因为快照二进制里的字段布局会变——不带版本的话，加一枚字段之后旧档会被按新布局静默错位读。
+        saves = new AsyncSaveSink(new FileSaveSink(
+                new File(getFilesDir(), "saves/v" + FileSaveSink.FORMAT_VERSION)));
+        game.attachSave(saves);
         // 内嵌像素中文要在第一块贴图烘出来之前装上（BAKE 是静态笔，装晚了一部分文本会用系统字烘）。
         // 和落盘出口同一条边界：渲染线程拿不到 Context，由 plat 在启动时注入。
         // 装失败必须出声：兜底态是"系统字 + 抗锯齿"，画面会整片变样，静默的话只会被当成"字体没生效"。
@@ -393,6 +407,7 @@ public final class MainActivity extends ComponentActivity {
         if (engine != null) engine.shutdown();
         // 渲染线程在 surfaceDestroyed 里已经 joined，此刻不会再有人写：等挂起的落盘走完
         store.shutdown();
+        if (saves != null) saves.shutdown();
     }
 
     @Override
