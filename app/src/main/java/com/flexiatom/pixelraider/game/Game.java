@@ -56,6 +56,7 @@ import com.flexiatom.pixelraider.ui.PauseScreen;
 import com.flexiatom.pixelraider.ui.RadarLayout;
 import com.flexiatom.pixelraider.ui.RevealScript;
 import com.flexiatom.pixelraider.ui.ResultScreen;
+import com.flexiatom.pixelraider.ui.SaveScreen;
 import com.flexiatom.pixelraider.ui.ShopScreen;
 import com.flexiatom.pixelraider.ui.Widgets;
 
@@ -309,6 +310,11 @@ public final class Game implements GameThread.Host {
     private final GrowthScreen growthPage = new GrowthScreen(font, uiText, glow);
     /** 调试页（仅 debug 构建可达）。同上。 */
     private final DebugScreen debug = new DebugScreen(font, uiText, glow);
+    /**
+     * 存档页（50 槽的列表页，从暂停页那枚「存档」进）。同上。
+     * <b>它不持有任何槽位数据</b>——画两形读的是 {@link #saveSlots} 那本账的引用（{@code open} 时递进去）。
+     */
+    private final SaveScreen savePage = new SaveScreen(font, uiText, glow);
     /** 局内成长：商店卡买到的等级与五个乘子（局外那套在 {@link #growth}，两套互不覆盖）。 */
     private final ShopRun shopRun = new ShopRun();
     /**
@@ -327,6 +333,8 @@ public final class Game implements GameThread.Host {
     private boolean shopPending;
     /** 进入调试页的界面时刻（面板入场与级联以它为原点，与商店同款）。 */
     private float debugAtUi;
+    /** 进入存档页的界面时刻。同上（整页待遇，入场原点与 {@code growthAtUi} 那一族同一个角色）。 */
+    private float saveAtUi;
     /**
      * 是否 debug 构建（FLAG_DEBUGGABLE）。由 plat 在启动时注入，决定暂停页那枚「调试」入口画不画——
      * 正式包不注册它的命中也不淡入，与 {@code PauseScreen} 里"未落地的出口整条剔除"同一条口径。
@@ -569,6 +577,23 @@ public final class Game implements GameThread.Host {
     }
 
     /**
+     * 删掉一份档：改账本 → 落账 → 把删除交给 IO 线程。三件的次序与 {@link #saveRun} 同一条理由——
+     * "哪些槽有档"的真源是掩码，列表页画它而不是画盘，所以账本先对，玩家抬手那一刻就看到这一行变空。
+     *
+     * <p>没注入通路 / 槽号非法 / 那一格本来就空，三种都<b>静默不做</b>：存档页的命中端
+     * （{@code SaveScreen.tappable}）本来就不受理这三形，走到这里等于有人绕过了面板。
+     * 与写侧同样<b>不撤回</b>：IO 那边失败时掩码说"没了"而盘上还留着字节，代价见池件 §8 第 5 条那条挂账。
+     */
+    public void deleteRun(int slot) {
+        if (saveSink == null) return;
+        if (slot < 0 || slot >= SaveSlots.CAPACITY) return;
+        if (!saveSlots.isOccupied(slot)) return;
+        saveSlots.release(slot);
+        saveSlots.commit(store);
+        saveSink.submitDelete(slot);
+    }
+
+    /**
      * 按下存档页某一行：投递一次读意图，<b>不等它</b>。结果落在 {@code AsyncSaveSink} 那枚引用槽里，
      * 由 {@link #applyPendingLoad()} 在安全点取回。
      *
@@ -604,11 +629,15 @@ public final class Game implements GameThread.Host {
      * <p><b>只在 {@code time.isPaused()} 为真时动手</b>。读的结果要是回来得比页面关闭还晚，那一格就
      * 继续留在槽里等下一次冻住——半路把一套状态盖到正在打的局上，玩家会看见自己的船瞬移而没有任何
      * 一次点击解释它。这里不取走就等于不产生失败：槽还在，{@link #loadInFlight()} 照实说"在等"。
+     *
+     * @return true = 取回了一份<b>并且整套上了</b>。调用方（{@link #frame}）因此知道该收页——
+     *         页面上那一行"读取中…"只有本类能回答"它结束了且成功了"，让面板自己猜时刻就是假进度。
+     *         失败与"这一帧没动手"都返回 false，两者由 {@link #takeLoadFailure()} 那枚边沿区分。
      */
-    private void applyPendingLoad() {
-        if (loadingSlot < 0 || !time.isPaused()) return;
+    private boolean applyPendingLoad() {
+        if (loadingSlot < 0 || !time.isPaused()) return false;
         AsyncSaveSink.Read read = saveSink.pollRead();
-        if (read == null) return;
+        if (read == null) return false;
         loadingSlot = -1;
         long meta = saveSlots.meta(read.slot);
         // 模式不进字节（真源是账本 meta 的 mode/tier 两位；章号由还原出来的波号推出），所以它得在
@@ -620,10 +649,11 @@ public final class Game implements GameThread.Host {
         applyMode(SaveSlots.modeOf(meta) == 1 ? Mode.campaign(tier) : Mode.endless(tier));
         if (applyRun(read.data)) {
             loadFailed = false;
-            return;
+            return true;
         }
         applyMode(previous);
         loadFailed = true;
+        return false;
     }
 
     /** 读端总装：段序与 {@link #captureRun()} 逐项镜像，最后断言<b>一口不剩</b>。 */
@@ -838,8 +868,9 @@ public final class Game implements GameThread.Host {
         // 三张固定页各自报整页高，居中原点由 pageTop 给（口径同结算页，不跟着战场长高）
         menu.layout(hitBoxLogic, m.pageTop(menu.pageHeight()), m.logicH);
         growthPage.layout(hitBoxLogic, m.pageTop(growthPage.pageHeight()), m.logicH);
+        savePage.layout(hitBoxLogic, m.pageTop(savePage.pageHeight()), m.logicH);
         // 面板走整张逻辑画布坐标（要在 320~560 上分账图表与卡片），另需安全区让它从挖孔带让开
-        pause.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic, debugBuild);
+        layoutPausePanel();
         shop.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic);
         debug.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic);
         particles = new ParticlePool(QualityProfile.particleBudget(qualityTier));
@@ -849,6 +880,17 @@ public final class Game implements GameThread.Host {
         // 测试里再写一遍 40 就立了第二个真源。
         grid = new SpatialGrid(Screen.LOGIC_W, m.logicH, enemies.capacity(),
                 SpatialGrid.DEFAULT_MAX_CENTER_DISTANCE);
+    }
+
+    /**
+     * 暂停面板的版面，两处调用点共用这一份实参：{@link #installGeometry}（尺寸或安全区变了）与
+     * {@link #openPause}（**模式变了**）。后者是必须的一条：第三行摆两格还是三格取决于
+     * {@code mode.campaign}，而换一局（{@code resetRun}）不重投 surface，只靠装几何那一处就会让
+     * 无尽局拿着上一局战役局的版面画出一枚点不动的「存档」。
+     */
+    private void layoutPausePanel() {
+        pause.layout(metrics.logicH, metrics.safeTop, metrics.safeBottom, hitBoxLogic, debugBuild,
+                mode.campaign && saveAvailable());
     }
 
     /**
@@ -913,7 +955,12 @@ public final class Game implements GameThread.Host {
         consumeInput();
         // 读档的交回点。它必须紧贴 consumeInput 之后、advance 之前，且只在冻住的世界里动手，
         // 两条理由都写在 applyPendingLoad 上。
-        applyPendingLoad();
+        if (applyPendingLoad()) {
+            onLoadLanded();
+        } else if (takeLoadFailure()) {
+            // 边沿读走即清：这一句只报一次，之后留在页上会被下一次动作误读成"还没失败"
+            savePage.showStatus(SaveScreen.STATUS_LOAD_FAILED);
+        }
         int steps = time.advance(deltaSeconds);
         probe.begin(FrameProbe.STEP);
         for (int i = 0; i < steps; i++) {
@@ -1026,6 +1073,12 @@ public final class Game implements GameThread.Host {
             closeDebug();
             return;
         }
+        if (top == ModalStack.SAVE) {
+            // 同调试页：掀回暂停页。存档页没有"回到战场"这枚出口，返回键若是走通用 pop 就会连 PAUSE
+            // 一起弹掉而**不解冻**（那条尾巴只认 pop 出来的是不是 PAUSE），玩家会被关在一块看不见的面板外。
+            closeSave();
+            return;
+        }
         if (modals.pop() == ModalStack.PAUSE) {
             time.setPaused(false);
             markModalClosed();
@@ -1036,6 +1089,7 @@ public final class Game implements GameThread.Host {
     private void openPause() {
         // 只问模态，不问 runOver：runOver 现在是"模拟闸门"，界面侧的单一真值住在栈顶
         if (modals.peek() != ModalStack.NONE) return;
+        layoutPausePanel();   // 每次拉开重算一遍第三行：这一局是战役还是无尽，只在开面板这一刻一定是现值
         modals.push(ModalStack.PAUSE);
         time.setPaused(true);
         dropMoveInput();
@@ -1193,6 +1247,76 @@ public final class Game implements GameThread.Host {
         }
     }
 
+    // ---- 存档页 -----------------------------------------------------------------------------
+
+    /**
+     * 开存档页：叠在暂停页之上，与 {@link #openDebug} 同一形态——时钟本就冻着，这里再冻一次是幂等。
+     *
+     * <p>{@code open} 递进去的是 {@link #saveSlots} 的<b>引用</b>不是副本：列表页画"哪一格有档"读的就是
+     * 那本账，所以存完一份之后下一次绘制立刻见到新槽，不需要谁去通知页面（{@code shopSnap} 同一手法）。
+     */
+    private void openSave() {
+        savePage.open(saveSlots);
+        modals.push(ModalStack.SAVE);
+        time.setPaused(true);
+        dropMoveInput();
+        saveAtUi = time.ui();
+    }
+
+    /** 掀回暂停页：只把 SAVE 出栈，时钟不动（理由同 {@link #closeDebug}）。 */
+    private void closeSave() {
+        if (modals.peek() != ModalStack.SAVE) return;
+        modals.pop();
+    }
+
+    /**
+     * 存档页报上来的动作。<b>页只决定"哪一格"，改数据的三件都住在本类</b>：
+     * <ul>
+     *   <li>{@code ACTION_BACK}：{@link #closeSave} 回暂停页，战场照旧定格。</li>
+     *   <li>{@code ACTION_SAVE}：拍当前这一局。<b>挂钟时刻由这一侧递进去</b>——
+     *       {@link #saveRun} 一次时钟读取都没有（那条纪律的原文在它的 {@code @param} 上）。
+     *       成了就把那枚键的标签亮成「已存档」，五十格全满就把"先删或选一份覆盖"顶到 meta 那一格。</li>
+     *   <li>{@code ACTION_LOAD}：投递一次读意图，<b>不等它</b>；回来的那一帧由 {@link #frame} 收页。</li>
+     *   <li>{@code ACTION_DELETE}：删掉选中那一份。</li>
+     * </ul>
+     * 翻页与选中在 {@code SaveScreen.pressUp} 内部就消化完了（报 {@code ACTION_NONE}），所以这里看不见它们。
+     */
+    private void onSavePointerUp(int action) {
+        if (action == SaveScreen.ACTION_BACK) {
+            closeSave();
+            return;
+        }
+        if (action == SaveScreen.ACTION_SAVE) {
+            int landed = saveRun(savePage.selectedSlot(), System.currentTimeMillis());
+            if (landed == SaveSlots.NONE) savePage.showStatus(SaveScreen.STATUS_FULL);
+            else savePage.markSaved();
+            return;
+        }
+        if (action == SaveScreen.ACTION_LOAD) {
+            requestLoad(savePage.selectedSlot());
+            return;
+        }
+        if (action == SaveScreen.ACTION_DELETE) {
+            deleteRun(savePage.selectedSlot());
+        }
+    }
+
+    /**
+     * 一份档真的套上了之后收页：<b>整摞掀掉并解冻</b>，而不是掀回暂停页。
+     *
+     * <p>理由不是省一次点击，是"载入"这一动作的回话只有战场本身给得出——波次、分数、血盾、敌数全换了，
+     * 玩家抬头就看见。停在暂停面板上等于拿一块板子回答"成功了吗"，答的还是别人那块板的读数。
+     *
+     * <p>{@link #markModalClosed} 那一条不能省：{@code modals.clear()} 之后栈顶是 {@code NONE}，
+     * 而抬起「载入」的那根手指下一击紧跟着就来——战场手势那道闸门只看时刻不看来源
+     * （理由写在 {@link #battlefieldGestureAllowed} 上），不补这一记就会被同一根手指多触发一次过载。
+     */
+    private void onLoadLanded() {
+        modals.clear();
+        time.setPaused(false);
+        markModalClosed();
+    }
+
     /**
      * 买一张卡。**顺序即正确性**：先确认这张卡真的能升、再扣钱、最后才把效果打到现场上。
      *
@@ -1283,6 +1407,10 @@ public final class Game implements GameThread.Host {
             debug.pressDown(x, y, time.ui() - debugAtUi, id);
             return;
         }
+        if (top == ModalStack.SAVE) {
+            savePage.pressDown(x, y, time.ui() - saveAtUi, id);
+            return;
+        }
         if (top == ModalStack.MENU) {
             menu.pressDown(x, y, time.ui() - menuAtUi, id);
             return;
@@ -1340,6 +1468,8 @@ public final class Game implements GameThread.Host {
             onShopPointerUp(shop.pressUp(x, y, time.ui() - shopAtUi, id));
         } else if (top == ModalStack.DEBUG) {
             onDebugPointerUp(debug.pressUp(x, y, time.ui() - debugAtUi, id));
+        } else if (top == ModalStack.SAVE) {
+            onSavePointerUp(savePage.pressUp(x, y, time.ui() - saveAtUi, id));
         } else if (top == ModalStack.MENU) {
             onMenuPointerUp(menu.pressUp(x, y, time.ui() - menuAtUi, id));
         } else if (top == ModalStack.GROWTH) {
@@ -1365,6 +1495,8 @@ public final class Game implements GameThread.Host {
             openShop(ShopRules.ENTRY_PAUSE);
         } else if (action == PauseScreen.ACTION_DEBUG) {
             openDebug();   // 仅 debug 构建才会报出这个码（面板里那格 isLive 才受理）
+        } else if (action == PauseScreen.ACTION_SAVE) {
+            openSave();    // 同上，判据多一条：非战役局那一格压根不存在（§5.5 已裁）
         } else if (action == PauseScreen.ACTION_RESTART) {
             // 出口一级化（规格 §四）：重开直接生效，没有二次确认弹窗
             restartFade = 1f;
@@ -1448,6 +1580,10 @@ public final class Game implements GameThread.Host {
         }
         if (top == ModalStack.DEBUG) {
             debug.pressDrag(x, y, time.ui() - debugAtUi, id);
+            return;
+        }
+        if (top == ModalStack.SAVE) {
+            savePage.pressDrag(x, y, time.ui() - saveAtUi, id);
             return;
         }
         if (top == ModalStack.MENU) {
@@ -2870,11 +3006,11 @@ public final class Game implements GameThread.Host {
         drawSweepFlash(c, top);
         probe.end(FrameProbe.FX);
         int modal = modals.peek();
-        // 三张**整页**模态（结算 / 主菜单 / 成长）共用一套待遇：自己报整页高、在画布里居中、
+        // 四张**整页**模态（结算 / 主菜单 / 成长 / 存档）共用一套待遇：自己报整页高、在画布里居中、
         // 不跟着战场长高，并且把 HUD 与波次横幅一起让位。这个布尔是那条待遇的**唯一**判据——
         // 分两处各列一遍模态号的写法，迟早会有一处忘记加新页（表现为"菜单底下亮着血条"）。
         boolean pageModal = modal == ModalStack.RESULT
-                || modal == ModalStack.MENU || modal == ModalStack.GROWTH;
+                || modal == ModalStack.MENU || modal == ModalStack.GROWTH || modal == ModalStack.SAVE;
         probe.begin(FrameProbe.MODAL);
         if (pageModal) {
             int pageSave = c.save();
@@ -2884,6 +3020,11 @@ public final class Game implements GameThread.Host {
             } else if (modal == ModalStack.GROWTH) {
                 c.translate(0f, metrics.pageTop(growthPage.pageHeight()));
                 growthPage.draw(c, time.ui() - growthAtUi);
+            } else if (modal == ModalStack.SAVE) {
+                // "读取中…"那一形的真源是 Game 那枚在飞槽号，面板自己不猜（池件 §9 第 8 条第⑤项）
+                savePage.setLoading(loadInFlight());
+                c.translate(0f, metrics.pageTop(savePage.pageHeight()));
+                savePage.draw(c, time.ui() - saveAtUi);
             } else {
                 c.translate(0f, metrics.pageTop(result.pageHeight()));
                 result.draw(c, sheet, time.ui() - resultAtUi);

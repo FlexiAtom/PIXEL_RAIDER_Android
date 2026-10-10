@@ -35,6 +35,12 @@ public final class ModalStack {
     public static final int GROWTH = 7;
     /** 调试页（仅 debug 构建可见），从暂停页进。叠在 PAUSE 之上——关掉它战场还冻在原地，与商店同款。 */
     public static final int DEBUG = 8;
+    /**
+     * 存档页，从暂停页进（池件 {@code pause-save-entry} §7 裁的乙：那枚键**只开页**）。
+     * 与 DEBUG 同款地叠在 PAUSE 之上，关掉它战场照旧冻着；也照旧**不催波次**——它是"打到一半
+     * 停下来存一份"，不是"这一波打完了"，BGM 因此不该重开（口径见 {@code Game.bgmTrackNow}）。
+     */
+    public static final int SAVE = 9;
 
     private final int[] stack = new int[8];
     private int size;

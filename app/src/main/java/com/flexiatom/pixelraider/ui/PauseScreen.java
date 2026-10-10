@@ -49,6 +49,11 @@ public final class PauseScreen {
     public static final int ACTION_SHOP = 5;
     /** 暂停页里的调试入口（仅 debug 构建受理）。排在商店之后，同样不与任何码相撞。 */
     public static final int ACTION_DEBUG = 6;
+    /**
+     * 暂停页里的存档页入口（池件 {@code pause-save-entry} §7 裁的乙：这枚键**只开页**，写入在页内）。
+     * 只在战役局受理——判据在 {@link #isLive}，与调试格同一手法。
+     */
+    public static final int ACTION_SAVE = 7;
     /** 换 tab 在面板内部就地生效，从不报给调用方，所以这里**没有** ACTION_TAB。 */
 
     /**
@@ -68,6 +73,13 @@ public final class PauseScreen {
      * 携带真动作。{@link #isLive} 才是绘制与命中的实际判据：{@code debugBuild} 为真时这一格才活。
      */
     static final boolean DEBUG_LIVE = false;
+    /**
+     * 存档入口的静态默认：{@code false}，手法照 {@link #DEBUG_LIVE}——这一格的生死在运行期的
+     * {@link #campaign} 上（§5.5 裁「非战役局＝不存在」），静态位只表达"契约测试看不见它"。
+     * 与调试格不同的是它**带着真动作**（{@link #ACTION_SAVE}，宿主 {@code Game.openSave} 同批落地），
+     * 所以这里不需要"未落地不许带动作"那条豁免。
+     */
+    static final boolean SAVE_LIVE = false;
 
     private static final String L_TITLE = "作战暂停";
     private static final String L_SAMPLING = "采样中…";
@@ -79,6 +91,7 @@ public final class PauseScreen {
     private static final String L_DEBUG = "调试";
     private static final String L_RESTART = "重开本局";
     private static final String L_MENU = "返回主菜单";
+    private static final String L_SAVE = "存档";
     /**
      * 八个卡片标签，下标对齐 {@link PauseLayout#CARDS} 与 {@link #cardValue} 的分支。**包私有**
      * 只为让测试钉住行数：对不上的话每次绘制都会越界，而暂停面板正好是激战里会被反复拉开的那块。
@@ -97,30 +110,51 @@ public final class PauseScreen {
     private final PauseLayout box = new PauseLayout();
     private final HudText hud = new HudText(32);
     private final RectI[] tabHit = {new RectI(), new RectI(), new RectI()};
-    /** 出口的**外扩命中框**（48dp 标准），下标对齐 {@link #EXIT_ACTION}。同时是按压区的判定框。调试格排在末位（6）。 */
+    /**
+     * 出口的**外扩命中框**（48dp 标准），下标对齐 {@link #EXIT_ACTION}。同时是按压区的判定框。
+     * 末两格是存档（6）与调试（7）——它们的矩形在非战役局／正式包里是空矩形，但受理与绘制
+     * 都先过 {@link #isLive}，所以那两处不会走到 {@code contains}（空矩形外扩成 48dp 会造出一个
+     * 画布原角的幽灵命中区）。
+     */
     private final RectI[] exitHit = {
-            new RectI(), new RectI(), new RectI(), new RectI(), new RectI(), new RectI(), new RectI()
+            new RectI(), new RectI(), new RectI(), new RectI(),
+            new RectI(), new RectI(), new RectI(), new RectI()
     };
     private final PressSelector press = new PressSelector();
+    /**
+     * 出口下标：{@link #drawn}、{@link #EXIT_ACTION}、{@code EXIT_LEVEL}、{@link #EXIT_LIVE} 与
+     * {@link #drawExits} 的绘制顺序**五处共用**这一组数。测试钉着它等于钉着"手工对齐"这件事
+     * 本身——少一格、错一位都会在 {@code PauseScreenTest} 里红。
+     */
+    static final int IDX_RESUME = 0;
+    static final int IDX_SHOP = 1;
+    static final int IDX_ACHIEVEMENTS = 2;
+    static final int IDX_SETTINGS = 3;
+    static final int IDX_RESTART = 4;
+    static final int IDX_MENU = 5;
+    static final int IDX_SAVE = 6;
+    static final int IDX_DEBUG = 7;
     /** 包内可见只为测试（{@code PauseScreenTest} 钉它与 {@link #EXIT_LIVE} 的下标对应）；对外仍然只报动作码。 */
     static final int[] EXIT_ACTION =
             {ACTION_RESUME, ACTION_SHOP, ACTION_NONE, ACTION_SETTINGS, ACTION_RESTART, ACTION_MENU,
-                    ACTION_DEBUG};
-    /** 每枚出口属于第几级（第二行那几枚同属一级，规格 §四 的级联按**行**延后，不按枚）。调试在第二行＝1。 */
-    private static final int[] EXIT_LEVEL = {0, 1, 1, 1, 2, 2, 1};
+                    ACTION_SAVE, ACTION_DEBUG};
+    /** 每枚出口属于第几级（第二行那几枚同属一级，规格 §四 的级联按**行**延后，不按枚）。调试在第二行＝1，存档在第三行＝2。 */
+    private static final int[] EXIT_LEVEL = {0, 1, 1, 1, 2, 2, 2, 1};
     /**
      * 未落地的出口在这里就整条剔除（既不响应也不淡入）。成就属 S5、设置属 S4-c 第三段——
      * 落地一个就把对应布尔翻成 true，并给 {@link #EXIT_ACTION} 那格真动作。
      * 这最后一句是契约，不是建议：{@code PauseScreenTest} 现在钉着"亮着的出口必须带真动作"。
-     * 调试那一格写的是静态 {@link #DEBUG_LIVE}（默认 false）；运行期它随 {@link #debugBuild} 走，
-     * 判据在 {@link #isLive}，不在这里。
+     * 调试与存档两格写的是静态 {@link #DEBUG_LIVE}／{@link #SAVE_LIVE}（都默认 false）；运行期
+     * 它们各随 {@link #debugBuild}／{@link #campaign} 走，判据在 {@link #isLive}，不在这里。
      */
     static final boolean[] EXIT_LIVE =
-            {true, SHOP_LIVE, ACHIEVEMENTS_LIVE, SETTINGS_LIVE, true, MENU_LIVE, DEBUG_LIVE};
+            {true, SHOP_LIVE, ACHIEVEMENTS_LIVE, SETTINGS_LIVE, true, MENU_LIVE, SAVE_LIVE, DEBUG_LIVE};
     private int canvasH = Screen.BATTLE_H;
     private int tab = TrendSampler.TAB_KILLS;
     /** 是否 debug 构建（由 {@link #layout} 传入）：决定第二行摆三格还是四格、以及调试那格活不活。 */
     private boolean debugBuild;
+    /** 这一局是否战役模式（由 {@link #layout} 从 {@code Game.mode} 传入）：决定第三行摆两格还是三格。 */
+    private boolean campaign;
 
     public PauseScreen(BitmapFont font, TextCache text, GlowAtlas glow) {
         kit = new DrawKit(font, text, glow);
@@ -130,10 +164,16 @@ public final class PauseScreen {
         return tab;
     }
 
-    public void layout(int logicH, int safeTop, int safeBottom, int minTouchLogic, boolean debugBuild) {
+    /**
+     * @param campaign 这一局是否战役模式（{@code Game.mode.campaign}）：true 时第三行摆三格并把
+     *                 「存档」那格交给 {@link #isLive} 受理；false 时那一格是空矩形、也不淡入
+     */
+    public void layout(int logicH, int safeTop, int safeBottom, int minTouchLogic,
+                       boolean debugBuild, boolean campaign) {
         canvasH = logicH <= 0 ? Screen.BATTLE_H : logicH;
         this.debugBuild = debugBuild;
-        box.layout(canvasH, safeTop, safeBottom, debugBuild);
+        this.campaign = campaign;
+        box.layout(canvasH, safeTop, safeBottom, debugBuild, campaign);
         for (int i = 0; i < tabHit.length; i++) {
             Widgets.hitRect(box.tabs[i], minTouchLogic, tabHit[i]);
         }
@@ -189,27 +229,29 @@ public final class PauseScreen {
     /**
      * 第 i 枚出口的**绘制框**——直接引用 {@link #box} 里的实例，不复制，免得两份真值。
      * 公开只为测试：按压态画在哪个框上、重叠断言量哪几个矩形，都得到这儿取。
-     * 下标 6 = 调试格（正式包里 {@code box.debug} 是空矩形，画不出、也命中不到）。
+     * 下标 6 = 存档格（非战役局空矩形）、7 = 调试格（正式包空矩形）——两者都画不出、也命中不到。
      */
     public RectI drawn(int i) {
         switch (i) {
-            case 0: return box.resume;
-            case 1: return box.shop;
-            case 2: return box.achievements;
-            case 3: return box.settings;
-            case 4: return box.restart;
-            case 5: return box.menu;
+            case IDX_RESUME: return box.resume;
+            case IDX_SHOP: return box.shop;
+            case IDX_ACHIEVEMENTS: return box.achievements;
+            case IDX_SETTINGS: return box.settings;
+            case IDX_RESTART: return box.restart;
+            case IDX_MENU: return box.menu;
+            case IDX_SAVE: return box.save;
             default: return box.debug;
         }
     }
 
     /**
      * 这一格现在活不活：静态表里写 true 的就活（成就/设置/商店/菜单那几个），调试格额外看
-     * {@link #debugBuild}——{@link #EXIT_LIVE} 里它恒记 false（让静态契约测试认它"不亮"），
-     * 真正的生死在这个运行期判据里。绘制与命中都走这一个函数，两处不会脱节。
+     * {@link #debugBuild}、存档格额外看 {@link #campaign}——两格的静态位都恒记 false（让
+     * {@code PauseScreenTest} 在类加载阶段认它们"不亮"），真正的生死在这两条运行期判据里。
+     * 绘制与命中都走这一个函数，两处不会脱节。
      */
     private boolean isLive(int i) {
-        return EXIT_LIVE[i] || (i == EXIT_ACTION.length - 1 && debugBuild);
+        return EXIT_LIVE[i] || (i == IDX_DEBUG && debugBuild) || (i == IDX_SAVE && campaign);
     }
 
     /**
@@ -404,21 +446,34 @@ public final class PauseScreen {
 
     private void drawExits(Canvas c, float elapsed) {
         int on = press.pressed();
-        drawResumeButton(c, PanelMotion.buttonProgress(0, elapsed), elapsed, on == 0);
+        drawResumeButton(c, PanelMotion.buttonProgress(EXIT_LEVEL[IDX_RESUME], elapsed), elapsed,
+                on == IDX_RESUME);
         drawFlatButton(c, box.shop, L_SHOP,
-                PanelMotion.buttonProgress(1, elapsed), SHOP_LIVE, false, on == 1);
+                PanelMotion.buttonProgress(EXIT_LEVEL[IDX_SHOP], elapsed), SHOP_LIVE, false,
+                on == IDX_SHOP);
         drawFlatButton(c, box.achievements, L_ACHIEVEMENTS,
-                PanelMotion.buttonProgress(1, elapsed), ACHIEVEMENTS_LIVE, false, on == 2);
+                PanelMotion.buttonProgress(EXIT_LEVEL[IDX_ACHIEVEMENTS], elapsed),
+                ACHIEVEMENTS_LIVE, false, on == IDX_ACHIEVEMENTS);
         drawFlatButton(c, box.settings, L_SETTINGS,
-                PanelMotion.buttonProgress(1, elapsed), SETTINGS_LIVE, false, on == 3);
+                PanelMotion.buttonProgress(EXIT_LEVEL[IDX_SETTINGS], elapsed),
+                SETTINGS_LIVE, false, on == IDX_SETTINGS);
         drawFlatButton(c, box.restart, L_RESTART,
-                PanelMotion.buttonProgress(2, elapsed), true, false, on == 4);
+                PanelMotion.buttonProgress(EXIT_LEVEL[IDX_RESTART], elapsed), true, false,
+                on == IDX_RESTART);
         drawFlatButton(c, box.menu, L_MENU,
-                PanelMotion.buttonProgress(2, elapsed), MENU_LIVE, true, on == 5);
+                PanelMotion.buttonProgress(EXIT_LEVEL[IDX_MENU], elapsed), MENU_LIVE, true,
+                on == IDX_MENU);
+        // 存档格只在战役局画：无尽包里 box.save 是空矩形、这一路整体跳过，第三行还是两格。
+        if (campaign) {
+            drawFlatButton(c, box.save, L_SAVE,
+                    PanelMotion.buttonProgress(EXIT_LEVEL[IDX_SAVE], elapsed), true, false,
+                    on == IDX_SAVE);
+        }
         // 调试格只在 debug 构建画：正式包里 box.debug 是空矩形、这一路整体跳过，第二行还是三格。
         if (debugBuild) {
             drawFlatButton(c, box.debug, L_DEBUG,
-                    PanelMotion.buttonProgress(1, elapsed), true, false, on == 6);
+                    PanelMotion.buttonProgress(EXIT_LEVEL[IDX_DEBUG], elapsed), true, false,
+                    on == IDX_DEBUG);
         }
     }
 

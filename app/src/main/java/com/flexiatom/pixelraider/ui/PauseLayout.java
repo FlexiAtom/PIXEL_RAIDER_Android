@@ -51,7 +51,7 @@ public final class PauseLayout {
     public static final int CARDS = CARD_ROWS * CARD_COLS;
     public static final int CELL_GAP = 4;
 
-    /** 三级按钮：继续作战（独占一行）→ 升级商店/成就/设置 → 重开/返回主菜单。 */
+    /** 三级按钮：继续作战（独占一行）→ 升级商店/成就/设置（debug 再加调试）→ 重开/返回主菜单（战役局再加存档）。 */
     public static final int ROW_PRIMARY_H = 22;
     public static final int ROW_H = 18;
     public static final int ROW_GAP = 4;
@@ -71,6 +71,14 @@ public final class PauseLayout {
      * {@link #SECONDARY_COLS}／本常量派生，不存在写死的第四格坐标。
      */
     public static final int SECONDARY_COLS_DEBUG = 4;
+    /**
+     * 战役局第三行的格数：{@code 重开本局 / 返回主菜单 / 存档}。池件 {@code pause-save-entry}
+     * §5.1 裁的落点，间隙取 {@link #CELL_GAP} 而不是 {@link #BUTTON_GAP}——212 = {@code 3×68 + 2×4}
+     * 只有这一种整除分法，而且 68 这一档与第二行正式包同宽（同一道算术的两个实例，中格中心
+     * 落在内容列中线上）。无尽局不给这一格（§5.5 裁「非战役局＝不存在」），那一局维持
+     * {@link Widgets#equalHalves} 的两格 102/102——今天这一行怎么排，无尽局还怎么排。
+     */
+    public static final int THIRD_COLS_CAMPAIGN = 3;
     /** 主操作占内容宽的 76%（规格 §四）。 */
     public static final float PRIMARY_W_RATIO = 0.76f;
 
@@ -111,13 +119,18 @@ public final class PauseLayout {
     public final RectI debug = new RectI();
     public final RectI restart = new RectI();
     public final RectI menu = new RectI();
+    /**
+     * 存档入口格：只在**战役局**占位；无尽局里它是空矩形（{@code contains} 恒假），
+     * 与 {@link #debug} 在正式包里的待遇同一手法（§5.5 裁「不存在」）。
+     */
+    public final RectI save = new RectI();
 
     public int contentLeft, contentRight, contentWidth;
     public int chartHeight;
 
-    /** 正式包口径：第二行三格（等价于 {@code layout(logicH, safeTop, safeBottom, false)}）。 */
+    /** 正式包口径：第二行三格、第三行两格（等价于 {@code layout(logicH, safeTop, safeBottom, false, false)}）。 */
     public void layout(int logicH, int safeTop, int safeBottom) {
-        layout(logicH, safeTop, safeBottom, false);
+        layout(logicH, safeTop, safeBottom, false, false);
     }
 
     /**
@@ -125,8 +138,9 @@ public final class PauseLayout {
      * @param safeTop    顶部安全区内缩，逻辑 px（{@link Screen.Metrics#safeTop}）——面板不再压进挖孔带
      * @param safeBottom 底部安全区内缩，逻辑 px
      * @param debugBuild 是否 debug 构建：true 时第二行挤成四格多摆一枚「调试」入口，正式包维持三格
+     * @param campaign   这一局是否战役模式：true 时第三行挤成三格多摆一枚「存档」入口，无尽局维持两格
      */
-    public void layout(int logicH, int safeTop, int safeBottom, boolean debugBuild) {
+    public void layout(int logicH, int safeTop, int safeBottom, boolean debugBuild, boolean campaign) {
         int h = logicH <= 0 ? Screen.BATTLE_H : logicH;
         panel.set(LEFT, safeTop + PANEL_GAP, RIGHT, h - safeBottom - PANEL_GAP);
         contentLeft = LEFT + BORDER + PAD;
@@ -146,7 +160,16 @@ public final class PauseLayout {
         int row2Top = row2Bottom - ROW_H;
         int row1Bottom = row2Top - ROW_GAP;
         int row1Top = row1Bottom - ROW_PRIMARY_H;
-        Widgets.equalHalves(contentLeft, row3Top, contentWidth, ROW_H, BUTTON_GAP, restart, menu);
+        if (campaign) {
+            for (int i = 0; i < THIRD_COLS_CAMPAIGN; i++) {
+                RectI out = i == 0 ? restart : i == 1 ? menu : save;
+                Widgets.gridCell(contentLeft, row3Top, contentWidth, ROW_H,
+                        THIRD_COLS_CAMPAIGN, 1, CELL_GAP, i, out);
+            }
+        } else {
+            Widgets.equalHalves(contentLeft, row3Top, contentWidth, ROW_H, BUTTON_GAP, restart, menu);
+            save.set(0, 0, 0, 0);   // 空矩形：无尽局里没有这一格，画不出也命中不到（照 debug 那格）
+        }
         int cols = debugBuild ? SECONDARY_COLS_DEBUG : SECONDARY_COLS;
         for (int i = 0; i < cols; i++) {
             RectI out = i == 0 ? shop : i == 1 ? achievements : i == 2 ? settings : debug;
