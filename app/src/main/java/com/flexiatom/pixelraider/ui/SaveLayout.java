@@ -130,6 +130,15 @@ public final class SaveLayout {
         return Math.max(0, Math.min(ROWS_PER_PAGE, SLOTS - pageStart(page)));
     }
 
+    /**
+     * 槽 {@code slot} 摆不摆在第 {@code page} 页上。存档页那三枚改数据的键读它：看不见目标的那一格
+     * 不许是活的（越界的那一侧是末页——那里只有 2 行，{@code < start + shown} 而非 {@code <=} 才是对的）。
+     */
+    public static boolean onPage(int page, int slot) {
+        int start = pageStart(page);
+        return slot >= start && slot < start + shownOn(page);
+    }
+
     // ---- 矩形 -----------------------------------------------------------------------------
 
     public static void titleRect(RectI out) {

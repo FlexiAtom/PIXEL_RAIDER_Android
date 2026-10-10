@@ -19,6 +19,7 @@
 package com.flexiatom.pixelraider.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import com.flexiatom.pixelraider.core.RectI;
@@ -127,6 +128,33 @@ public class SaveLayoutTest {
         }
         assertEquals("全架列了一遍少一槽或多一槽", SaveLayout.SLOTS, seen);
         assertEquals("末页只有两行", 2, SaveLayout.shownOn(SaveLayout.PAGES - 1));
+    }
+
+    /**
+     * 每一槽恰好落在某一页上——不重不漏，且<b>末页那一侧的边界是开口的</b>。
+     *
+     * <p>这条钉的是存档页三枚改数据的键的受理闸（看不见目标的那一格不许是活的）。它有两种错法，
+     * 表现完全不同：把 {@code <} 写成 {@code <=} 会让末页"多出一个不存在的第 3 行"，玩家按删除
+     * 打到一个从没画过的槽上；而漏判（区间收得太窄）会让选中格永远点不动那三枚键。
+     * 越界的槽号（-1＝没选中、{@code SLOTS}＝脏数据）一律假，不抛。
+     */
+    @Test
+    public void everySlotBelongsToExactlyOnePage() {
+        for (int slot = 0; slot < SaveLayout.SLOTS; slot++) {
+            int hits = 0;
+            for (int page = 0; page < SaveLayout.PAGES; page++) {
+                if (SaveLayout.onPage(page, slot)) hits++;
+            }
+            assertEquals("槽 " + slot + " 不在任何一页上", 1, hits);
+        }
+        assertFalse("没选中（NONE）不该被算成看得见", SaveLayout.onPage(0, SaveSlots.NONE));
+        assertFalse(SaveLayout.onPage(SaveLayout.PAGES - 1, SaveSlots.NONE));
+        assertFalse("全架之外的槽号不该落在任何一页", SaveLayout.onPage(SaveLayout.PAGES - 1, SaveLayout.SLOTS));
+        assertTrue("末页最后一行该是活的（末页只有两行，最容易收错的就是这里）",
+                SaveLayout.onPage(SaveLayout.PAGES - 1, SaveLayout.SLOTS - 1));
+        assertFalse("第一页的末行不许认第二页的第一槽",
+                SaveLayout.onPage(0, SaveLayout.ROWS_PER_PAGE));
+        assertTrue(SaveLayout.onPage(1, SaveLayout.ROWS_PER_PAGE));
     }
 
     /** 越界页号钳到边界页，不返回空架也不抛：页号来自持久化过一次的面板状态，重启后可能比 PAGES 大。 */

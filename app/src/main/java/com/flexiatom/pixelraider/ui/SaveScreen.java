@@ -248,7 +248,10 @@ public final class SaveScreen {
         press.clear();
     }
 
-    /** 翻一页：选中跟着页走没意义（选的是槽，不是行），所以翻页不清选中，但清掉上一句提示。 */
+    /**
+     * 翻一页：选中**不**跟着页走（选的是槽，不是行号），所以翻页保留选中，只清掉上一句提示。
+     * 保留它不会让三枚改数据的键偷偷作用于看不见的那一格——那条闸在 {@link #selectionVisible()} 上。
+     */
     private void turnPage(int delta) {
         int p = SaveLayout.clampPage(page + delta);
         if (p == page) return;
@@ -312,9 +315,29 @@ public final class SaveScreen {
         if (i == IDX_BACK) return true;                  // 唯一的出口，永远留着（否则读档失败时会被关在这一页）
         if (i == IDX_PREV) return page > 0;
         if (i == IDX_NEXT) return page < SaveLayout.PAGES - 1;
-        if (loading) return false;                       // 一份在飞时不再发起第二份
-        if (i == IDX_SAVE) return true;
-        return selection != SaveSlots.NONE && slots.isOccupied(selection);
+        if (i == IDX_SAVE) return saveLive();
+        return selectionLive();
+    }
+
+    /**
+     * 载入与删除共用的受理判据，**绘制端与命中端读同一份**（手法见商店那句"灰着的卡点不动
+     * 与点不动的卡扣不到钱不可能分裂"）。三条各自挡一种错法：一份在飞时不再发起第二份；
+     * 没选中或选中的是空格就没得载入／删除；以及**选中格不在这一页时全灰**——看不见目标就不该能按下，
+     * 而"点了没反应、隔壁页悄悄少一份档"正是这一格唯一会被玩家判成 bug 的形状。
+     */
+    private boolean selectionLive() {
+        return !loading && selection != SaveSlots.NONE && slots.isOccupied(selection)
+                && selectionVisible();
+    }
+
+    /** 存档键单独一条：**没选中**是合法输入（写进第一个空槽，那条路得留在玩家手边）。 */
+    private boolean saveLive() {
+        return !loading && (selection == SaveSlots.NONE || selectionVisible());
+    }
+
+    /** 选中格落不落在当前这一页（选中跟着页走是允许的，见 {@link #turnPage}）。 */
+    private boolean selectionVisible() {
+        return SaveLayout.onPage(page, selection);
     }
 
     // ---- 绘制 -----------------------------------------------------------------------------
@@ -346,15 +369,10 @@ public final class SaveScreen {
         SaveLayout.actionCell(0, ra);
         drawFlatButton(c, ra, L_LOAD, kBtn, live, press.pressed() == IDX_LOAD, false);
         SaveLayout.actionCell(1, ra);
-        drawFlatButton(c, ra, savedLatched ? L_SAVED : L_SAVE, kBtn, !loading,
+        drawFlatButton(c, ra, savedLatched ? L_SAVED : L_SAVE, kBtn, saveLive(),
                 press.pressed() == IDX_SAVE, false);
         SaveLayout.actionCell(2, ra);
         drawFlatButton(c, ra, L_DELETE, kBtn, live, press.pressed() == IDX_DELETE, true);
-    }
-
-    /** 载入与删除都只对**有档**的选中格有效，两者共用一条判据，只差在按钮画成灰不灰。 */
-    private boolean selectionLive() {
-        return !loading && selection != SaveSlots.NONE && slots.isOccupied(selection);
     }
 
     private void drawTitle(Canvas c, float p) {
