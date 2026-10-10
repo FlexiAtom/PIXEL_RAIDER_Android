@@ -44,7 +44,10 @@ package com.flexiatom.pixelraider.game;
  *
  * <p><b>战役侧 hp 恒 1、无尽侧恒跑 {@link Tier#NORMAL}</b> 是本类的一条不变式：两条 hp 来源因此在
  * 任一模式下都<b>只有一轴非 1</b>，乘起来不会双计。这条不是巧合，是设计——选档只发生在战役的选关页，
- * 无尽没有档可挑（[规格 §5] 待裁第 2 格答"不加"）。它由 {@code ModeTest} 钉住。
+ * 无尽那头没有"关卡"可续，档在那边只剩数值斜率一个意思，而斜率已经被裁成线性的了。⚠ 但<b>"无尽要不要
+ * 难度"那一格他还没裁</b>（[规格 §5] 待裁第 2 格，我的主张是"不加"，不是他的裁定）⇒ 今天 {@link #ENDLESS}
+ * 里写死的 {@link Tier#NORMAL} 是<b>可推翻的默认</b>：构造器认 {@code (false, TERMINAL)}，只是没有任何
+ * 调用点这么造。"无尽侧恒 {@link Tier#NORMAL}"这一条由 {@code ModeTest.endlessHasOnlyTheGrowthHpAxis} 钉住。
  *
  * <p><b>字段 final、构造 package-private</b>：与 {@link Tier} 同一条纪律。中途换模式＝把已经刷出来的怪
  * 和接下来要刷的怪切成两套规则，所以换模式只有 {@link Game} 的整局重置一处能做。
