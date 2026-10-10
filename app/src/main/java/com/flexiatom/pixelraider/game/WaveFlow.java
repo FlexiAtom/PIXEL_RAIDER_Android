@@ -45,6 +45,14 @@ public final class WaveFlow {
     private final WaveDirector director;
     private final Rng rng;
 
+    /**
+     * 本局的模式（[规格 §5.5]）。这里要它只为两格：<b>局末出口</b>与<b>出怪批次</b>——两格都在本类，
+     * 且各自只有这一个读取点。敌数、hp、权重那几格经 {@link WaveDirector} 转授，不在这里重复读。
+     *
+     * <p>volatile 与 {@code WaveDirector.mode} 同一条理由（整局重置有一条链来自 UI 线程）。
+     */
+    private volatile Mode mode = Mode.CAMPAIGN;
+
     private int wave;
     private int phase = PREP;
     private float phaseLeft;
@@ -64,6 +72,14 @@ public final class WaveFlow {
     public WaveFlow(WaveDirector director, Rng rng) {
         this.director = director;
         this.rng = rng;
+    }
+
+    /**
+     * 唯一的换模式入口。它与 {@link WaveDirector#setMode} 必须由同一个整局重置<b>一起</b>调用——
+     * 分两次调会给出一帧的窗口，那一帧里"终局判据"读新模式而"敌数"读旧模式。
+     */
+    public void setMode(Mode mode) {
+        this.mode = mode;
     }
 
     /** 开局与 {@code resetRun} 都走这里：波号回到 1，队列重新抽。 */
@@ -163,11 +179,32 @@ public final class WaveFlow {
         if (gapLeft > 0f) return NONE;
         if (aliveCount >= Balance.wave.maxAlive) return NONE;   // 排队，不消费
         int kind = kinds[cursor++];
-        gapLeft = director.spawnGapFor(wave);
+        gapLeft = nextGap();
         armed = true;
         // 最后一只是在刷出**之后**才判清的：先翻相位会让它自己没被计入存活数。
         if (cursor >= kindCount) phase = CLEAR;
         return kind;
+    }
+
+    /**
+     * 刷出上一只之后该隔多久再刷下一只。
+     *
+     * <p><b>战役侧一字节不动</b>（逐只付 {@code spawnGapFor}）。无尽侧走<b>批次</b>：每
+     * {@link Balance.Wave#endlessBatchSize} 只算一批，批内间隙归零、批间付一次 {@code spawnGapFor}。
+     *
+     * <p>为什么批次不是可选项而是这条链的一部分：那条"无尽＝敌数线性加下去"的裁定被实测证伪过——
+     * 逐只节拍下多出来的怪<b>排在 {@code maxAlive} 那道闸外面等位</b>，同屏峰值实测仍是 1。
+     * 也就是"数量加了但玩家什么都感觉不到"。批次让一坨怪<b>同时</b>进场，闸才真的被压住。
+     *
+     * <p>批内是"一帧一只"而不是真同帧：{@code Game.spawnQueued} 每帧只问一次 {@code pollSpawn}，
+     * 所以 12 只在 12 帧（60fps ≈ 0.2 s）内落地。视觉上是一坨，池侧却仍守住"每帧至多一只"的分配上限
+     * －这一条是刻意的取舍，比给 {@code pollSpawn} 加"吐 N 只"的新契约便宜。
+     */
+    private float nextGap() {
+        float cadence = director.spawnGapFor(wave);
+        if (!mode.batchesSpawns()) return cadence;
+        int size = Balance.wave.endlessBatchSize;
+        return cursor % size == 0 ? cadence : 0f;
     }
 
     private void enterPrep() {
@@ -200,7 +237,13 @@ public final class WaveFlow {
 
     private void closeWave() {
         guaranteeChips += Drops.waveGuarantee(wave, chipDroppedThisWave ? 1 : 0);
-        if (wave >= Balance.wave.maxWave) {
+        // [规格 §5.5] 局末出口仍<b>只有一处</b>，只是它从此读模式：战役＝走完 maxWave，无尽＝永不。
+        // 这条链最容易走歪的地方是有人在此之外再补一个"无尽第 N 波也算通关"的出口——那就成了两个真源。
+        //
+        // ⚠ 阈值今天恒等于全局 maxWave（40），因为战役的<b>波号是全局的</b>（八章＝40 波，见
+        // {@link Mode#chapterForWave} 那条理由）。批3 的选关页一旦能"从第 k 章起一局"，这一格要换成
+        // 章末的<b>相对</b>阈值——那是本方法剩下的唯一一分叉，别再往别处加判据。
+        if (mode.hasVictory() && wave >= Balance.wave.maxWave) {
             phase = VICTORY;
             return;
         }

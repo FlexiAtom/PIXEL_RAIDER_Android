@@ -29,36 +29,43 @@ public final class WaveDirector {
     private final Balance.Wave cfg;
 
     /**
-     * 本局的难度档。[规格 §8.5] 这张表的三个波次格经这里"转授"——`Game` 是持有者，只有它的整局
-     * 重置能换值（{@link #setTier}）。
+     * 本局的模式（[规格 §5.5] 那张分叉清单的真源）。档在它里面（{@link Mode#tier}），所以这里不再
+     * 单存一份——两枚字段会给出"读到两份档"的窗口，而 {@link Game#applyMode} 是唯一写点。
      *
      * <p>volatile 的理由与 {@code InputRouter.metrics} 同一条：整局重置有**一条**调用链来自 UI 线程
-     * （{@code MainActivity → GameSurfaceView.applyMetrics → onSurfaceReady}），而这三格在渲染线程上读。
-     * 引用写本身原子，所以不加它会有的后果不是撕裂，是"新一局头几帧还按上一局的档出怪"。
+     * （{@code MainActivity → GameSurfaceView.applyMetrics → onSurfaceReady}），而这些格在渲染线程上读。
+     * 引用写本身原子，所以不加它会有的后果不是撕裂，是"新一局头几帧还按上一局的模式出怪"。
      */
-    private volatile Tier tier = Tier.NORMAL;
+    private volatile Mode mode = Mode.CAMPAIGN;
 
     public WaveDirector() {
-        this(Balance.wave, Tier.NORMAL);
+        this(Balance.wave, Mode.CAMPAIGN);
     }
 
     public WaveDirector(Balance.Wave cfg) {
-        this(cfg, Tier.NORMAL);
+        this(cfg, Mode.CAMPAIGN);
     }
 
-    public WaveDirector(Balance.Wave cfg, Tier tier) {
+    public WaveDirector(Balance.Wave cfg, Mode mode) {
         this.cfg = cfg;
-        this.tier = tier;
+        this.mode = mode;
     }
 
-    /** 唯一的换档入口（由 `Game` 的整局重置调用）。档是不可变的，所以这里只换引用。 */
-    public void setTier(Tier tier) {
-        this.tier = tier;
+    /** 唯一的换模式入口（由 `Game` 的整局重置调用）。模式与档都是不可变的，所以这里只换引用。 */
+    public void setMode(Mode mode) {
+        this.mode = mode;
     }
 
     /**
-     * [规格] 敌人数用**对数增长** {@code 5 + floor(n^0.72 × 3)}，不是线性的 5 + n×3。
+     * [规格] 战役侧敌人数用**对数增长** {@code 5 + floor(n^0.72 × 3)}，不是线性的 5 + n×3。
      * 线性公式在 15 波后超出清场能力——那是数值问题，不是技术问题。
+     *
+     * <p>⚠ 上面那句理由<b>只在战役成立</b>（[规格 §5.5]）：它的隐含前提是"40 波有终局、每波之间有商店"。
+     * 无尽撤了终态就要换一条能一直长的形状，取线性 {@code base + endlessStep×(n-1)}，同屏压力改由
+     * {@link Balance.Wave#maxAlive} 的排队与 {@link Balance.Wave#endlessBatchSize} 的批次管。
+     * 两条曲线<b>实算</b>是第 7 波相交（都是 17 只）：之前无尽更少（第 1 波 5 vs 8），之后更陡
+     * （第 40 波 83 vs 47 ≈1.8 倍）。无尽的压力因此落在"同屏更多"那一侧，不是"个体更厚"
+     * （hp 那两道闸见 {@link Mode#hpGrowth}）。
      *
      * <p>[规格 §8.2] 档位的 {@link Tier#countMul} 乘在**整波总数**上（不是乘在 base 上、也不是乘在
      * 那个 3 上）：休闲档第 39 波 46 → 39 只，少的那 7 只是这条链给的。乘子必须落在这个方法内部，
@@ -66,8 +73,10 @@ public final class WaveDirector {
      */
     public int enemyCountFor(int wave) {
         if (wave < 1) return 0;
-        int n = cfg.base + (int) Math.floor(Math.pow(wave, cfg.exponent) * cfg.multiplier);
-        n = Math.round(n * tier.countMul);
+        int n = mode.campaign
+                ? cfg.base + (int) Math.floor(Math.pow(wave, cfg.exponent) * cfg.multiplier)
+                : cfg.base + cfg.endlessStep * (wave - 1);
+        n = Math.round(n * mode.tier.countMul);
         return Math.min(n, 400);   // 防御：数值表被改坏时不至于刷出天文数字
     }
 
@@ -96,10 +105,22 @@ public final class WaveDirector {
         return idx < 0 ? 0 : idx;
     }
 
-    /** Boss 血量随波次长：[可调] 每轮 Boss 比上一轮厚 45%。 */
+    /**
+     * Boss 血量随波次长：[可调] 每轮 Boss 比上一轮厚 45%。
+     *
+     * <p>⚠ 这条指数是给<b>八轮</b>设计的（战役第 40 波 nth=8，堡垒 120 → 1617，已是单场多打一分钟的量）。
+     * 无尽没有第 9 轮之后该多厚的裁定，所以把轮次夹在 {@link Mode#chapterCount()} 那一轮＝<b>无尽里
+     * Boss 是节拍而不是成长</b>。战役侧这一夹是惰性的（nth 最大正好等于 8）⇒ 基线读数一字节不动。
+     * {@code 1.45} 那枚字面量仍在本方法里（与 {@code Balance.bosses} 那批数值不同源），改动它以前
+     * 先想清楚战役第 8 章那场堡垒战要不要一起变。
+     *
+     * <p>⚠ 这一夹读 {@link Mode#chapterCount()}（那格走全局 {@code Balance.wave}），而 {@code bossEvery}
+     * 走 {@link #cfg}。今天每个构造点传的都是同一枚全局表 ⇒ 同源；将来若真注入自定义 cfg，这一格会分叉。
+     */
     public int bossHpFor(int wave) {
         Balance.Boss b = Balance.bosses[bossIndexFor(wave)];
         int nth = Math.max(1, wave / cfg.bossEvery);
+        if (!mode.campaign) nth = Math.min(nth, mode.chapterCount());
         return Math.round(b.hp * (float) Math.pow(1.45, nth - 1));
     }
 
@@ -117,7 +138,7 @@ public final class WaveDirector {
         outWeights[Balance.Enemy.WEAVE] = Math.max(1, Math.round(80 * (1f - t * 0.70f)));
         outWeights[Balance.Enemy.SHOOTER] = Math.round(18 + 46 * t);
         outWeights[Balance.Enemy.RUSHER] = Math.round(8 + 52 * t);
-        outWeights[Balance.Enemy.ELITE] = Math.round(tier.eliteFloor + 30 * t);
+        outWeights[Balance.Enemy.ELITE] = Math.round(mode.tier.eliteFloor + 30 * t);
         outWeights[Balance.Enemy.BURSTER] = Math.round(4 + 26 * t);
         int total = 0;
         for (int i = 0; i < 6; i++) total += outWeights[i];
@@ -145,7 +166,7 @@ public final class WaveDirector {
     public float spawnGapFor(int wave) {
         float g = cfg.spawnGap - (wave - 1) * cfg.spawnGapTightenPerWave;
         if (g < cfg.spawnGapMin) return cfg.spawnGapMin;
-        return Math.max(cfg.spawnGapMin, g * tier.gapMul);
+        return Math.max(cfg.spawnGapMin, g * mode.tier.gapMul);
     }
 
     /** [规格] 8 星区，前 4 无惩罚覆盖 1~20 波，后 4 带环境规则覆盖 21~40 波。 */

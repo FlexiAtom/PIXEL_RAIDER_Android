@@ -170,7 +170,7 @@ public class WaveDirectorTest {
      */
     @Test
     public void normalTierIsByteForByteTheBaseline() {
-        WaveDirector n = new WaveDirector(Balance.wave, Tier.NORMAL);
+        WaveDirector n = new WaveDirector(Balance.wave, Mode.campaign(Tier.NORMAL));
         int[] plain = new int[6];
         int[] scaled = new int[6];
         for (int wave = 1; wave <= 48; wave++) {
@@ -186,8 +186,8 @@ public class WaveDirectorTest {
     /** [规格 §8.2] 数量乘子乘在**整波总数**上（休闲档第 39 波 46→39，少的那 7 只就是这条链给的）。 */
     @Test
     public void tierScalesTheWholeWaveCount() {
-        WaveDirector casual = new WaveDirector(Balance.wave, Tier.CASUAL);
-        WaveDirector terminal = new WaveDirector(Balance.wave, Tier.TERMINAL);
+        WaveDirector casual = new WaveDirector(Balance.wave, Mode.campaign(Tier.CASUAL));
+        WaveDirector terminal = new WaveDirector(Balance.wave, Mode.campaign(Tier.TERMINAL));
         assertEquals(7, casual.enemyCountFor(1));
         assertEquals(12, casual.enemyCountFor(5));
         assertEquals(39, casual.enemyCountFor(39));
@@ -203,8 +203,8 @@ public class WaveDirectorTest {
     public void tierMovesOnlyTheEliteFloorAmongWeights() {
         int[] plain = new int[6], casual = new int[6], terminal = new int[6];
         assertEquals(212, d.kindWeightsFor(1, plain));
-        assertEquals(212, new WaveDirector(Balance.wave, Tier.CASUAL).kindWeightsFor(1, casual));
-        assertEquals(216, new WaveDirector(Balance.wave, Tier.TERMINAL).kindWeightsFor(1, terminal));
+        assertEquals(212, new WaveDirector(Balance.wave, Mode.campaign(Tier.CASUAL)).kindWeightsFor(1, casual));
+        assertEquals(216, new WaveDirector(Balance.wave, Mode.campaign(Tier.TERMINAL)).kindWeightsFor(1, terminal));
         for (int i = 0; i < 6; i++) {
             if (i == Balance.Enemy.ELITE) continue;
             assertEquals("种 " + i + " 不该被档位动（休闲）", plain[i], casual[i]);
@@ -215,7 +215,7 @@ public class WaveDirectorTest {
         // 过渡完成后（t 钳在 1）三档差的仍是同一个数：普通 32、终结 36，下限不参与那条 30 的斜坡
         int[] p21 = new int[6], t21 = new int[6];
         assertEquals(225, d.kindWeightsFor(21, p21));
-        assertEquals(229, new WaveDirector(Balance.wave, Tier.TERMINAL).kindWeightsFor(21, t21));
+        assertEquals(229, new WaveDirector(Balance.wave, Mode.campaign(Tier.TERMINAL)).kindWeightsFor(21, t21));
         assertEquals(32, p21[Balance.Enemy.ELITE]);
         assertEquals(36, t21[Balance.Enemy.ELITE]);
     }
@@ -226,8 +226,8 @@ public class WaveDirectorTest {
      */
     @Test
     public void tierScalesGapButNeverBreaksItsFloor() {
-        WaveDirector casual = new WaveDirector(Balance.wave, Tier.CASUAL);
-        WaveDirector terminal = new WaveDirector(Balance.wave, Tier.TERMINAL);
+        WaveDirector casual = new WaveDirector(Balance.wave, Mode.campaign(Tier.CASUAL));
+        WaveDirector terminal = new WaveDirector(Balance.wave, Mode.campaign(Tier.TERMINAL));
         assertEquals(0.6325f, casual.spawnGapFor(1), 1e-5f);
         assertEquals(0.473f, terminal.spawnGapFor(1), 1e-5f);
         assertEquals(0.27692f, terminal.spawnGapFor(39), 1e-5f);
@@ -246,27 +246,27 @@ public class WaveDirectorTest {
      */
     @Test
     public void bossHpIsExemptFromTheTier() {
-        WaveDirector terminal = new WaveDirector(Balance.wave, Tier.TERMINAL);
-        WaveDirector casual = new WaveDirector(Balance.wave, Tier.CASUAL);
+        WaveDirector terminal = new WaveDirector(Balance.wave, Mode.campaign(Tier.TERMINAL));
+        WaveDirector casual = new WaveDirector(Balance.wave, Mode.campaign(Tier.CASUAL));
         assertEquals(90, terminal.bossHpFor(5));
         assertEquals(274, terminal.bossHpFor(20));
         assertEquals(d.bossHpFor(5), casual.bossHpFor(5));
         assertEquals(d.bossHpFor(40), terminal.bossHpFor(40));
     }
 
-    /** 转授：{@code setTier} 是唯一的换档写点，换完之后三格一起跟着走（§8.5 的"档跟着一整局走"）。 */
+    /** 转授：{@code setMode} 是唯一的换模式写点（档在 Mode 里），换完之后三格一起跟着走（§8.5 的"档跟着一整局走"）。 */
     @Test
-    public void setTierRetransmitsAllThreeWaveCells() {
+    public void setModeRetransmitsAllThreeWaveCells() {
         WaveDirector x = new WaveDirector();
         assertEquals(46, x.enemyCountFor(39));
         assertEquals(0.322f, x.spawnGapFor(39), 1e-5f);
-        x.setTier(Tier.TERMINAL);
+        x.setMode(Mode.campaign(Tier.TERMINAL));
         assertEquals(62, x.enemyCountFor(39));
         assertEquals(0.27692f, x.spawnGapFor(39), 1e-5f);
         int[] w = new int[6];
         x.kindWeightsFor(1, w);
         assertEquals(6, w[Balance.Enemy.ELITE]);
-        x.setTier(Tier.CASUAL);
+        x.setMode(Mode.campaign(Tier.CASUAL));
         assertEquals(39, x.enemyCountFor(39));
         assertEquals(0.3703f, x.spawnGapFor(39), 1e-5f);
         x.kindWeightsFor(1, w);

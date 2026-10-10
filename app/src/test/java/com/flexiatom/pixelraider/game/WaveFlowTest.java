@@ -111,6 +111,76 @@ public class WaveFlowTest {
         assertEquals("通关后还在刷怪", WaveFlow.NONE, f.pollSpawn(DT, 0));
     }
 
+    // ---- 无尽侧的分叉（[规格 §5.5]：局末出口 + 出怪批次）--------------------------------------
+
+    private static WaveFlow endlessFlow(long seed) {
+        Mode m = Mode.ENDLESS;
+        WaveFlow f = new WaveFlow(new WaveDirector(Balance.wave, m), new Rng(seed));
+        f.setMode(m);                     // 与 director 那一枚必须同一个 Mode（applyMode 的同批纪律）
+        f.begin();
+        return f;
+    }
+
+    /** 连续 {@code count} 次"真的吐出一只"发生在第几帧。 */
+    private static int[] spawnFrames(WaveFlow f, int count) {
+        int[] at = new int[count];
+        int frame = 0, n = 0;
+        while (n < count) {
+            if (f.pollSpawn(DT, 0) >= 0) at[n++] = frame;
+            if (++frame > FRAME_CAP) throw new AssertionError("凑不够 " + count + " 只出怪帧");
+        }
+        return at;
+    }
+
+    /**
+     * [规格 §5.5] 那条"无尽＝敌数线性加下去"被实测证伪过：逐只节拍下多出来的怪<b>排在
+     * {@code maxAlive} 那道闸外面等位</b>，同屏峰值仍是 1。批次就是这一格的解，所以这条用例钉的是
+     * <b>一坨同时进场</b>（前 {@code endlessBatchSize} 只帧帧相邻），而不是"总数变了"——总数归
+     * {@code ModeTest} 那批用例管。
+     */
+    @Test
+    public void endlessSpawnsInBatchesOfEndlessBatchSize() {
+        WaveFlow f = endlessFlow(23L);
+        advanceToWave(f, 6, WaveFlow.SPAWN);       // 第 6 波：无尽侧 15 只，够跨过一道批界
+        int size = Balance.wave.endlessBatchSize;
+        int[] at = spawnFrames(f, size + 1);
+        for (int i = 1; i < size; i++) {
+            assertEquals("批内第 " + i + " 只不该等帧", at[i - 1] + 1, at[i]);
+        }
+        assertTrue("批界没付间隔（批次会退化成无限流）", at[size] - at[size - 1] > 1);
+    }
+
+    /** 同一个波号、同一枚 director 接口，战役侧仍是逐只节拍——这条是"基线一字节不动"的那半边。 */
+    @Test
+    public void campaignStillSpawnsOneByOneAtTheSameWave() {
+        WaveFlow f = flow(23L);
+        advanceToWave(f, 6, WaveFlow.SPAWN);
+        int[] at = spawnFrames(f, 2);
+        assertTrue("战役侧第 2 只贴着第 1 只＝批次串到了战役", at[1] - at[0] > 20);
+    }
+
+    /**
+     * [规格 §5.5] 第 2 行：局末出口<b>只有一处</b>，无尽走过去是"不封顶"。这里用 {@code debugReachFinalWave}
+     * 那条真路径（空队列 ⇒ CLEAR ⇒ closeWave），因为它能直接读 {@link WaveFlow#phase}；
+     * 战役侧的 VICTORY 由上面那两条用例守着，这条守的是"同一格换成无尽就翻不出 VICTORY"。
+     */
+    @Test
+    public void endlessKeepsGoingPastTheCampaignLastWave() {
+        WaveFlow f = endlessFlow(13L);
+        f.debugReachFinalWave();
+        assertEquals(Balance.wave.maxWave, f.wave());
+        for (int i = 0; i < 10 && f.phase() != WaveFlow.INTERMISSION; i++) {
+            f.pollSpawn(DT, 0);
+        }
+        assertEquals("无尽在第 40 波就该继续", WaveFlow.INTERMISSION, f.phase());
+        assertFalse(f.victory());
+        assertEquals(Balance.wave.maxWave, f.wavesCleared());
+        for (int i = 0; i < 600 && f.wave() <= Balance.wave.maxWave; i++) {
+            f.pollSpawn(DT, 0);
+        }
+        assertEquals("间歇走完要能进第 41 波", Balance.wave.maxWave + 1, f.wave());
+    }
+
     // ---- 出怪 --------------------------------------------------------------------------------
 
     @Test
