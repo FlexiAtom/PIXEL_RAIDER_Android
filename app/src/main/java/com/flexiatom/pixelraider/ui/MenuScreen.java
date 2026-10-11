@@ -30,7 +30,7 @@ import com.flexiatom.pixelraider.gfx.TextCache;
 import com.flexiatom.pixelraider.plat.Screen;
 
 /**
- * 主菜单页绘制（规格 §四「主次靠样式区分」那一段 + 成长页的宿主）。
+ * 主菜单页绘制（规格 §四「主次靠样式区分」那一段 + 成长页与存档页的宿主）。
  *
  * <p>与 {@link ResultScreen} 同一类坐标系：Canvas 进来时已经被平移到这一页的居原点，
  * 所以这里全用 {@link MenuLayout} 的页内相对坐标；命中框在 {@link #layout} 里换算成屏幕坐标。
@@ -45,13 +45,18 @@ public final class MenuScreen {
     public static final int ACTION_NONE = 0;
     public static final int ACTION_RUN = 1;
     public static final int ACTION_GROWTH = 2;
+    /** 存档页的菜单侧入口（他 2026-10-11 逐字「补进主菜单，本件内做掉」）。它开的是**那座页**，不是"最近那一份"。 */
+    public static final int ACTION_SAVE = 3;
 
-    private static final int[] BTN_ACTION = {ACTION_RUN, ACTION_GROWTH};
+    /** 命中下标 → 动作码。长度必须等于那一行的格数，对账钉在 {@code MenuScreenTest}（少一枚＝画得出来点不到）。 */
+    static final int[] BTN_ACTION = {ACTION_RUN, ACTION_GROWTH, ACTION_SAVE};
     // 三枚字面量对测试可见：它们与 MenuLayout 的带区是**跨文件耦合**，宽度只对得上与否要能红着脸报出来。
     static final String L_TITLE = "PIXEL RAIDER";
     private static final String L_CHIP = "芯片";
     static final String L_GROWTH = "成长";
     static final String L_RUN = "开始新一局";
+    /** 与暂停页那枚同名（同一座页的两个入口，名字该一样）；实测 IN 子集，不缺字形。 */
+    static final String L_SAVE = "存档";
 
     private static final int BIG = 2;
     private static final int MID_X = (MenuLayout.LEFT + MenuLayout.RIGHT) / 2;
@@ -60,9 +65,11 @@ public final class MenuScreen {
     private final HudText hud = new HudText(32);
     private final RectI runDraw = new RectI();
     private final RectI growthDraw = new RectI();
+    private final RectI saveDraw = new RectI();
     private final RectI runHit = new RectI();
     private final RectI growthHit = new RectI();
-    private final RectI[] btnHit = {runHit, growthHit};
+    private final RectI saveHit = new RectI();
+    private final RectI[] btnHit = {runHit, growthHit, saveHit};
     private final RectI ra = new RectI();
     private int pageTop;
     private int logicH = Screen.BATTLE_H;
@@ -80,11 +87,13 @@ public final class MenuScreen {
     public void layout(int minTouchLogic, int pageTop, int logicH) {
         this.pageTop = pageTop;
         this.logicH = logicH;
-        MenuLayout.buttons(runDraw, growthDraw);
+        MenuLayout.buttons(runDraw, growthDraw, saveDraw);
         Widgets.hitRect(runDraw, minTouchLogic, runHit);
         Widgets.hitRect(growthDraw, minTouchLogic, growthHit);
+        Widgets.hitRect(saveDraw, minTouchLogic, saveHit);
         runHit.offsetInPlace(0, pageTop);
         growthHit.offsetInPlace(0, pageTop);
+        saveHit.offsetInPlace(0, pageTop);
     }
 
     public void pressDown(int x, int y, float elapsed, int pointerId) {
@@ -106,7 +115,7 @@ public final class MenuScreen {
 
     /**
      * 手指下面第几枚按钮。这里**不做** {@link ShopScreen} 那套"先绘制框再外扩框"的两遍 pass：
-     * 两枚按钮各 108 宽、横向的外扩是空转，纵向之外又没有任何别的目标可抢，一遍外扩框就够
+     * 三枚按钮各 72 宽、横向的外扩是空转，纵向之外又没有任何别的目标可抢，一遍外扩框就够
      * （与 {@link ResultScreen} 同一情形——那里也只有单遍）。
      *
      * <p>每枚要等自己**淡完**才可点：入口淡入途中就注册命中，等于在玩家看清"这里有按钮"之前
@@ -171,13 +180,18 @@ public final class MenuScreen {
             kit.bakedCentered(c, L_RUN, Md3.PX_BODY, Md3.onPrimary(),
                     runDraw.centerX(), runDraw.centerY(), alpha);
         }
-        float k1 = PanelMotion.buttonProgress(1, elapsed);
-        if (k1 <= 0f) return;
-        int alpha = Math.round(255f * k1);
-        if (on == 1) {
-            kit.stateLayer(c, growthDraw, Md3.R_EXTRA_SMALL, Md3.primary(), Md3.STATE_PRESSED_ALPHA);
+        drawTextButton(c, growthDraw, L_GROWTH, PanelMotion.buttonProgress(1, elapsed), on == 1);
+        drawTextButton(c, saveDraw, L_SAVE, PanelMotion.buttonProgress(2, elapsed), on == 2);
+    }
+
+    /** text 键（无底、只有字）＝这一页的二级出口，与结算页那枚「返回菜单」同形：主操作才有底。 */
+    private void drawTextButton(Canvas c, RectI box, String label, float k, boolean pressed) {
+        if (k <= 0f) return;
+        int alpha = Math.round(255f * k);
+        if (pressed) {
+            kit.stateLayer(c, box, Md3.R_EXTRA_SMALL, Md3.primary(), Md3.STATE_PRESSED_ALPHA);
         }
-        kit.bakedCentered(c, L_GROWTH, Md3.PX_BODY, Md3.primary(),
-                growthDraw.centerX(), growthDraw.centerY(), alpha);
+        kit.bakedCentered(c, label, Md3.PX_BODY, Md3.primary(),
+                box.centerX(), box.centerY(), alpha);
     }
 }

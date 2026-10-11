@@ -986,11 +986,18 @@ public final class Game implements GameThread.Host {
      * <p>暂停/商店/调试**不改轨**（它们是"打到一半"）：换轨在听觉里就是"这一局结束了"的信号，
      * 按一次暂停就听见一次终局是假话。主菜单、成长页、图鉴、设置、结算页归到同一条 MENU 轨——
      * 那五屏都是"没在打"。
+     *
+     * <p>存档页是这一族里唯一**宿主不固定**的一屏（暂停页与主菜单两处入口共用），所以它跟着栈里
+     * 有没有菜单来定轨，而不是跟着自己：从菜单进来是"找一份档续玩"＝没在打；从暂停页进来还是
+     * 打到一半。这一格不落，玩家在主菜单底下按「存档」会听见战斗乐——那正是上面那句假话的形状。
      */
     private int bgmTrackNow() {
         int top = modals.peek();
         if (top == ModalStack.MENU || top == ModalStack.GROWTH || top == ModalStack.RESULT
                 || top == ModalStack.CODEX || top == ModalStack.SETTINGS) {
+            return AudioCues.BGM_MENU;
+        }
+        if (top == ModalStack.SAVE && modals.contains(ModalStack.MENU)) {
             return AudioCues.BGM_MENU;
         }
         return wave.currentWaveIsBoss() ? AudioCues.BGM_BOSS : AudioCues.BGM_PLAY;
@@ -1055,7 +1062,7 @@ public final class Game implements GameThread.Host {
             return;
         }
         if (top == ModalStack.MENU) {
-            // 主菜单是这条链的根（结算页 → 主菜单 → 成长页），它下面没有"上一级"可回，
+            // 主菜单是这条链的根（结算页 → 主菜单 → 成长页／存档页），它下面没有"上一级"可回，
             // 返回键什么都不做。成长页不留在这条判断里：它走下面的通用 pop，退回主菜单。
             return;
         }
@@ -1074,8 +1081,9 @@ public final class Game implements GameThread.Host {
             return;
         }
         if (top == ModalStack.SAVE) {
-            // 同调试页：掀回暂停页。存档页没有"回到战场"这枚出口，返回键若是走通用 pop 就会连 PAUSE
-            // 一起弹掉而**不解冻**（那条尾巴只认 pop 出来的是不是 PAUSE），玩家会被关在一块看不见的面板外。
+            // 同调试页：掀回**宿主那一屏**（暂停页或主菜单）。存档页没有"回到战场"这枚出口，返回键若是走
+            // 通用 pop 就会连 PAUSE 一起弹掉而**不解冻**（那条尾巴只认 pop 出来的是不是 PAUSE），
+            // 玩家会被关在一块看不见的面板外。菜单宿主那一侧走的是"回到菜单"，同样不该解冻。
             closeSave();
             return;
         }
@@ -1250,20 +1258,25 @@ public final class Game implements GameThread.Host {
     // ---- 存档页 -----------------------------------------------------------------------------
 
     /**
-     * 开存档页：叠在暂停页之上，与 {@link #openDebug} 同一形态——时钟本就冻着，这里再冻一次是幂等。
+     * 开存档页：**两处入口共用**——暂停页那枚键与主菜单那枚（2026-10-11 他补的
+     * 「补进主菜单，本件内做掉」）。叠在打开它的那一屏之上，与 {@link #openDebug} 同一形态——
+     * 时钟本就冻着，这里再冻一次是幂等；从菜单进来栈是 {@code MENU → SAVE}，返回键掀回菜单。
      *
      * <p>{@code open} 递进去的是 {@link #saveSlots} 的<b>引用</b>不是副本：列表页画"哪一格有档"读的就是
      * 那本账，所以存完一份之后下一次绘制立刻见到新槽，不需要谁去通知页面（{@code shopSnap} 同一手法）。
+     *
+     * @param writable 宿主有没有"正在打的这一局"可拍：暂停页 true，主菜单 false。false 时页内那枚
+     *                 写入键**不摆**（{@code SaveLayout.actionCell}），菜单侧因此只有载入与删除两格。
      */
-    private void openSave() {
-        savePage.open(saveSlots);
+    private void openSave(boolean writable) {
+        savePage.open(saveSlots, writable);
         modals.push(ModalStack.SAVE);
         time.setPaused(true);
         dropMoveInput();
         saveAtUi = time.ui();
     }
 
-    /** 掀回暂停页：只把 SAVE 出栈，时钟不动（理由同 {@link #closeDebug}）。 */
+    /** 掀回宿主那一屏：只把 SAVE 出栈，时钟不动（理由同 {@link #closeDebug}）。 */
     private void closeSave() {
         if (modals.peek() != ModalStack.SAVE) return;
         modals.pop();
@@ -1272,7 +1285,7 @@ public final class Game implements GameThread.Host {
     /**
      * 存档页报上来的动作。<b>页只决定"哪一格"，改数据的三件都住在本类</b>：
      * <ul>
-     *   <li>{@code ACTION_BACK}：{@link #closeSave} 回暂停页，战场照旧定格。</li>
+     *   <li>{@code ACTION_BACK}：{@link #closeSave} 掀回宿主那一屏（暂停页或主菜单），战场照旧定格。</li>
      *   <li>{@code ACTION_SAVE}：拍当前这一局。<b>挂钟时刻由这一侧递进去</b>——
      *       {@link #saveRun} 一次时钟读取都没有（那条纪律的原文在它的 {@code @param} 上）。
      *       成了就把那枚键的标签亮成「已存档」，五十格全满就把"先删或选一份覆盖"顶到 meta 那一格。</li>
@@ -1496,7 +1509,7 @@ public final class Game implements GameThread.Host {
         } else if (action == PauseScreen.ACTION_DEBUG) {
             openDebug();   // 仅 debug 构建才会报出这个码（面板里那格 isLive 才受理）
         } else if (action == PauseScreen.ACTION_SAVE) {
-            openSave();    // 同上，判据多一条：非战役局那一格压根不存在（§5.5 已裁）
+            openSave(true);   // 同上，判据多一条：非战役局那一格压根不存在（§5.5 已裁）
         } else if (action == PauseScreen.ACTION_RESTART) {
             // 出口一级化（规格 §四）：重开直接生效，没有二次确认弹窗
             restartFade = 1f;
@@ -1530,13 +1543,16 @@ public final class Game implements GameThread.Host {
         menu.clearPress();
     }
 
-    /** 主菜单的两个出口：开新局，或去成长页花芯片。 */
+    /** 主菜单的三枚出口：开新局、去成长页花芯片、开存档页续玩**哪**一份（他 10-11 自纠后用的就是"哪"）。 */
     private void onMenuPointerUp(int action) {
         if (action == MenuScreen.ACTION_RUN) {
             restartFade = 1f;
             resetRun(Mode.CAMPAIGN);    // 里面那句 popUntil(NONE) 顺手把这一页收掉
         } else if (action == MenuScreen.ACTION_GROWTH) {
             openGrowth();
+        } else if (action == MenuScreen.ACTION_SAVE) {
+            // false：菜单底下没有"正在打的这一局"可拍（这一局已被放弃，理由见 openMenu），所以页内只有载入与删除
+            openSave(false);
         }
     }
 

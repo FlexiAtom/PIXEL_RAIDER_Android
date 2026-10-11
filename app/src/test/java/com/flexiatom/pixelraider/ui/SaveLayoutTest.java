@@ -235,9 +235,9 @@ public class SaveLayoutTest {
     public void theTwoRowsAreThreeCellsWithUniformGutters() {
         RectI a0 = new RectI(), a1 = new RectI(), a2 = new RectI();
         RectI n0 = new RectI(), n1 = new RectI(), n2 = new RectI();
-        SaveLayout.actionCell(0, a0);
-        SaveLayout.actionCell(1, a1);
-        SaveLayout.actionCell(2, a2);
+        SaveLayout.actionCell(0, true, a0);
+        SaveLayout.actionCell(1, true, a1);
+        SaveLayout.actionCell(2, true, a2);
         SaveLayout.navCell(0, n0);
         SaveLayout.navCell(1, n1);
         SaveLayout.navCell(2, n2);
@@ -254,6 +254,37 @@ public class SaveLayoutTest {
         assertEquals("三格铺满内容列", SaveLayout.CONTENT_LEFT, a0.left);
         assertEquals("三格铺满内容列", SaveLayout.CONTENT_RIGHT, a2.right);
         assertEquals("两行的列位一模一样（翻页不动横账）", a1.left, n1.left);
+    }
+
+    /**
+     * 只读宿主（从主菜单进页，没有"正在打的这一局"可拍）：写入格**不摆**，动作行重新摊成两格。
+     *
+     * <p>空矩形是"非战役局：已裁＝不存在"那一条的同形手法（{@code PauseLayout} 的 campaign/debug
+     * 就是这么处理的），换的是"这一格压根不存在"而不是"这一格灰着"——灰着的按钮比没有按钮更糟。
+     *
+     * <p>两格形**不是**把三格形中间那一格抹掉：那样左右两格各自留在原位，中间空出一道 69 宽的洞，
+     * 读起来像"这里少了一个按钮"。这里两格重新铺满同一条内容列（216 = 2×106 + 4），缝仍是那个 4。
+     */
+    @Test
+    public void readOnlyHostDropsTheWriteCellAndRepacksTheRow() {
+        RectI load = new RectI(), save = new RectI(), del = new RectI();
+        SaveLayout.actionCell(0, false, load);
+        SaveLayout.actionCell(1, false, save);
+        SaveLayout.actionCell(2, false, del);
+        assertRect("载入（两格形）", load, 12, SaveLayout.ACTION_TOP, 118, SaveLayout.ACTION_BOTTOM);
+        assertRect("删除（两格形）", del, 122, SaveLayout.ACTION_TOP, 228, SaveLayout.ACTION_BOTTOM);
+        assertEquals("不摆＝空矩形", 0, save.width());
+        assertEquals("不摆＝空矩形", 0, save.height());
+        assertFalse("空矩形不许还占着任何一处坐标", save.contains(0, 0));
+        assertEquals("缝仍是那一道 4", SaveLayout.CELL_GAP, del.left - load.right);
+        assertEquals("两格照样铺满内容列", SaveLayout.CONTENT_LEFT, load.left);
+        assertEquals("两格照样铺满内容列", SaveLayout.CONTENT_RIGHT, del.right);
+        assertEquals("两格等宽", load.width(), del.width());
+        // 三格形一字未动：分叉只发生在中间那一格上，暂停页那侧读不到任何变化
+        SaveLayout.actionCell(0, true, load);
+        SaveLayout.actionCell(2, true, del);
+        assertRect("载入（三格形）", load, COL0_L, SaveLayout.ACTION_TOP, COL0_R, SaveLayout.ACTION_BOTTOM);
+        assertRect("删除（三格形）", del, COL2_L, SaveLayout.ACTION_TOP, COL2_R, SaveLayout.ACTION_BOTTOM);
     }
 
     /**

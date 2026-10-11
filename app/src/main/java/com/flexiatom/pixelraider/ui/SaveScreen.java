@@ -118,6 +118,11 @@ public final class SaveScreen {
 
     /** 槽位账本的**引用**；没 open 过就是这块初值（一张空账），画出来是 50 个空格，不崩。 */
     private SaveSlots slots = new SaveSlots();
+    /**
+     * 宿主那一边有没有"正在打的这一局"可拍（开页时由 {@code Game} 给，页内不变）：
+     * 暂停页 true、主菜单 false。false 时写入格**不摆**（见 {@link SaveLayout#actionCell}）。
+     */
+    private boolean writable;
     private int page;
     private int selection = SaveSlots.NONE;
     private int status = STATUS_NONE;
@@ -140,9 +145,15 @@ public final class SaveScreen {
         return SaveLayout.PAGE_H;
     }
 
-    /** 开页：页号、选中、提示、「已存档」全部归零——上一次开页的反馈不许带进这一次。 */
-    public void open(SaveSlots slots) {
+    /**
+     * 开页：页号、选中、提示、「已存档」全部归零——上一次开页的反馈不许带进这一次。
+     *
+     * @param writable 宿主那一边有没有活局可拍（暂停页 true / 主菜单 false）。它跟着开页走而不是
+     *                 每帧现读：这座页在栈上时，压在它底下的那一屏不会自己换人。
+     */
+    public void open(SaveSlots slots, boolean writable) {
         this.slots = slots == null ? new SaveSlots() : slots;
+        this.writable = writable;
         page = 0;
         selection = SaveSlots.NONE;
         status = STATUS_NONE;
@@ -208,11 +219,11 @@ public final class SaveScreen {
         Widgets.hitRect(ra, minTouchLogic, hit[IDX_PREV]);
         SaveLayout.navCell(2, ra);
         Widgets.hitRect(ra, minTouchLogic, hit[IDX_NEXT]);
-        SaveLayout.actionCell(0, ra);
+        SaveLayout.actionCell(0, writable, ra);
         Widgets.hitRect(ra, minTouchLogic, hit[IDX_LOAD]);
-        SaveLayout.actionCell(1, ra);
+        SaveLayout.actionCell(1, writable, ra);
         Widgets.hitRect(ra, minTouchLogic, hit[IDX_SAVE]);
-        SaveLayout.actionCell(2, ra);
+        SaveLayout.actionCell(2, writable, ra);
         Widgets.hitRect(ra, minTouchLogic, hit[IDX_DELETE]);
         for (int i = 0; i < hit.length; i++) hit[i].offsetInPlace(0, pageTop);
     }
@@ -302,7 +313,7 @@ public final class SaveScreen {
         if (pass == 1) return hit[i];
         if (i < SaveLayout.ROWS_PER_PAGE) SaveLayout.rowRect(i, ra);
         else if (i < IDX_LOAD) SaveLayout.navCell(i == IDX_BACK ? 1 : i == IDX_PREV ? 0 : 2, ra);
-        else SaveLayout.actionCell(i - IDX_LOAD, ra);
+        else SaveLayout.actionCell(i - IDX_LOAD, writable, ra);
         return ra;
     }
 
@@ -331,9 +342,14 @@ public final class SaveScreen {
         return !loading && selectionOccupied() && selectionVisible();
     }
 
-    /** 存档键单独一条：**没选中**是合法输入（写进第一个空槽，那条路得留在玩家手边）。 */
+    /**
+     * 存档键单独一条：除了 {@link #selectionLive()} 那三条，**没选中**也是合法输入（写进第一个空槽，
+     * 那条路得留在玩家手边）；再加最前面一条——**宿主得有一局可拍**。从主菜单开进来时那一格不摆，
+     * 这条是它命中端的兜闸（矩形是空的，可 {@code Widgets.hitRect} 会把空矩形外扩成一块幽灵命中区，
+     * 只靠几何挡不住）。
+     */
     private boolean saveLive() {
-        return !loading && (selection == SaveSlots.NONE || selectionVisible());
+        return writable && !loading && (selection == SaveSlots.NONE || selectionVisible());
     }
 
     /** 选中格落不落在当前这一页（选中跟着页走是允许的，见 {@link #turnPage}）。 */
@@ -383,13 +399,15 @@ public final class SaveScreen {
         drawFlatButton(c, ra, L_NEXT, kBtn, page < SaveLayout.PAGES - 1,
                 press.pressed() == IDX_NEXT, false);
         boolean live = selectionLive();
-        SaveLayout.actionCell(0, ra);
+        SaveLayout.actionCell(0, writable, ra);
         drawFlatButton(c, ra, L_LOAD, kBtn, live, press.pressed() == IDX_LOAD, false);
-        SaveLayout.actionCell(1, ra);
-        String saveLabel = saveLabel(savedLatched, selectionOccupied());
-        drawFlatButton(c, ra, saveLabel, kBtn, saveLive(), press.pressed() == IDX_SAVE,
-                L_OVERWRITE.equals(saveLabel));   // 覆盖与删除同色：两枚都是"这一按会少一份档"
-        SaveLayout.actionCell(2, ra);
+        if (writable) {
+            SaveLayout.actionCell(1, writable, ra);
+            String saveLabel = saveLabel(savedLatched, selectionOccupied());
+            drawFlatButton(c, ra, saveLabel, kBtn, saveLive(), press.pressed() == IDX_SAVE,
+                    L_OVERWRITE.equals(saveLabel));   // 覆盖与删除同色：两枚都是"这一按会少一份档"
+        }
+        SaveLayout.actionCell(2, writable, ra);
         drawFlatButton(c, ra, L_DELETE, kBtn, live, press.pressed() == IDX_DELETE, true);
     }
 

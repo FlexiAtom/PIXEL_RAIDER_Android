@@ -156,10 +156,26 @@ public final class SaveLayout {
         out.set(LEFT, top, RIGHT, top + ROW_H);
     }
 
-    /** 动作行三格：0 载入 / 1 存档 / 2 删除。 */
-    public static void actionCell(int i, RectI out) {
+    /**
+     * 动作行第 {@code i} 格：0 载入 / 1 存档 / 2 删除。
+     *
+     * <p>{@code writable} = 宿主那一边有没有"正在打的这一局"可拍：从暂停页进来是真的（三格）；
+     * 从主菜单进来是假的——菜单底下那一局按 {@code Game.openMenu} 自己的注释已经"已被放弃"，
+     * 拍它等于凭空多一份没人打过的空局。那一格就**不摆**（空矩形，照暂停页无尽局／正式包里
+     * 存档格与调试格那条「已裁＝不存在」的手法），余下两格摊满整行，不塌出半个洞。
+     */
+    public static void actionCell(int i, boolean writable, RectI out) {
+        if (writable) {
+            Widgets.gridCell(CONTENT_LEFT, ACTION_TOP, CONTENT_WIDTH, ACTION_H,
+                    CELLS, 1, CELL_GAP, i, out);
+            return;
+        }
+        if (i == 1) {
+            out.set(0, 0, 0, 0);     // 空矩形：contains 恒假（命中端还另有一条 writable 闸兜着，见 SaveScreen.tappable）
+            return;
+        }
         Widgets.gridCell(CONTENT_LEFT, ACTION_TOP, CONTENT_WIDTH, ACTION_H,
-                CELLS, 1, CELL_GAP, i, out);
+                CELLS - 1, 1, CELL_GAP, i > 1 ? 1 : 0, out);
     }
 
     /** 翻页行三格：0 上一页 / 1 返回 / 2 下一页。 */

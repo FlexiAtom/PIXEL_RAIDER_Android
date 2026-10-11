@@ -37,6 +37,7 @@ public class MenuScreenTest {
 
     private final RectI run = new RectI();
     private final RectI growth = new RectI();
+    private final RectI save = new RectI();
     private final RectI unused = new RectI();
 
     @Test
@@ -44,22 +45,32 @@ public class MenuScreenTest {
         assertEquals(0, MenuScreen.ACTION_NONE);
         assertEquals(1, MenuScreen.ACTION_RUN);
         assertEquals(2, MenuScreen.ACTION_GROWTH);
+        assertEquals(3, MenuScreen.ACTION_SAVE);
         assertNotEquals(MenuScreen.ACTION_RUN, MenuScreen.ACTION_GROWTH);
+        assertNotEquals(MenuScreen.ACTION_GROWTH, MenuScreen.ACTION_SAVE);
         // 「谁都不做」必须是 0——Game 里那串 if 靠 0 走 fallthrough
         assertTrue(MenuScreen.ACTION_NONE < MenuScreen.ACTION_RUN);
+        // 三枚出口对三格：少一枚就是"画得出来点不到"，多一枚就是 under() 报出的下标越界
+        assertEquals(MenuLayout.BUTTON_COLS, MenuScreen.BTN_ACTION.length);
     }
 
     @Test
-    public void buttonLabelsFitTheirOwnHalfOfTheRow() {
-        MenuLayout.buttons(run, growth);
-        // 半宽 108：五个 12px 汉字（60）还留着余量，第七个字才开始压到邻钮
+    public void buttonLabelsFitTheirOwnCellOfTheRow() {
+        MenuLayout.buttons(run, growth, save);
+        // 一格 72：五个 12px 汉字（60）刚好坐下，第六个字才开始压到邻钮
         assertEquals(5, MenuScreen.L_RUN.length());
         assertEquals(2, MenuScreen.L_GROWTH.length());
+        assertEquals(2, MenuScreen.L_SAVE.length());
+        assertEquals(72, run.width());
         assertTrue(MenuScreen.L_RUN, MenuScreen.L_RUN.length() * Md3.PX_BODY <= run.width());
         assertTrue(MenuScreen.L_GROWTH, MenuScreen.L_GROWTH.length() * Md3.PX_BODY <= growth.width());
+        assertTrue(MenuScreen.L_SAVE, MenuScreen.L_SAVE.length() * Md3.PX_BODY <= save.width());
         assertNotEquals("两枚按钮同名 → 余光里读不出主次",
                 MenuScreen.L_RUN, MenuScreen.L_GROWTH);
-        assertTrue("按钮不该超出自己那半行", run.right <= growth.left);
+        assertNotEquals("成长与存档都是二级 text 键，同名就分不出哪枚开哪座页",
+                MenuScreen.L_GROWTH, MenuScreen.L_SAVE);
+        assertTrue("按钮不该超出自己那一格", run.right <= growth.left);
+        assertTrue("按钮不该超出自己那一格", growth.right <= save.left);
     }
 
     @Test

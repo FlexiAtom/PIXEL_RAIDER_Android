@@ -187,7 +187,7 @@ public class SaveScreenTest {
             }
         }
         RectI cell = new RectI();
-        SaveLayout.actionCell(0, cell);
+        SaveLayout.actionCell(0, true, cell);
         int narrowest = cell.width();
         SaveLayout.navCell(0, cell);
         narrowest = Math.min(narrowest, cell.width());
