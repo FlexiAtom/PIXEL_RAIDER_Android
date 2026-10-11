@@ -152,6 +152,18 @@ public class SaveSlotsTest {
     }
 
     @Test
+    public void commitFlushesSoTheLedgerOutlivesTheProcess() {
+        // 2026-10-12 他报的缺陷：按下「存档」之后进程结束，档就没了。根因是 commit 只 putLong 不 flush，
+        // 这批键一直停在 AsyncKeyValue 的待办清单里（那一层"flush ⇒ 交给 IO 线程落地"已由
+        // AsyncKeyValueTest 钉住），所以这里要钉的是**这一头确实发起了那次落盘**。
+        MemStore store = new MemStore();
+        SaveSlots s = new SaveSlots();
+        s.occupy(7, 1L, 1L);
+        s.commit(store);
+        assertEquals("commit 之名含落盘：不 flush 就是内存账", 1, store.flushes);
+    }
+
+    @Test
     public void aFullClearLandsOnDiskAsAnEmptyLedger() {
         MemStore store = new MemStore();
         SaveSlots s = new SaveSlots();

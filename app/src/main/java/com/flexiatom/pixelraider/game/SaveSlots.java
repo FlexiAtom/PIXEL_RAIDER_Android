@@ -79,7 +79,15 @@ public final class SaveSlots {
         }
     }
 
-    /** 低频时机落盘（按下「存档」那一次、删档那一次）。渲染线程调 {@code KeyValue.putLong} 只登记，不写盘。 */
+    /**
+     * 低频时机落盘（按下「存档」那一次、删档那一次）。渲染线程调 {@code KeyValue.putLong} 只登记，不写盘。
+     *
+     * <p><b>末尾那道 {@code flush} 是这个名字的承诺</b>：只 {@code putLong} 不 flush，这批键就永远停在
+     * {@code AsyncKeyValue} 的待办清单里，进程一结束就只剩内存里的账——2026-10-12 他报的「存档会在结束
+     * 运行后丢失」正是这一格（快照字节走 {@code SaveSink} 当场落文件，账本走这里没落，于是重启后掩码为 0、
+     * 列表全空而盘上留着一堆孤儿字节）。flush 在那一层只是把批次交给 IO 线程，渲染线程调它不踩
+     * [规格 §八] 那条红线。
+     */
     public void commit(KeyValue store) {
         store.putLong(MASK, mask);
         for (int slot = 0; slot < CAPACITY; slot++) {
@@ -87,6 +95,7 @@ public final class SaveSlots {
             store.putLong(META + slot, meta[slot]);
             store.putLong(STAMP + slot, stamp[slot]);
         }
+        store.flush();
     }
 
     public boolean isOccupied(int slot) {
