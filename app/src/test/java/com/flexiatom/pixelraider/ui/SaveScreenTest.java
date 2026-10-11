@@ -132,7 +132,7 @@ public class SaveScreenTest {
      *
      * <p>钉三件事：① 那三个字逐字是裁定里的写法（"已保存""已写入"都会让这句反馈与池件对不上）；
      * ② 它以动作名结尾——同一枚键换标签，换的是**时态**不是**动作**，玩家认得出是刚才那一下；
-     * ③ 它不比动作名短，所以排版上它是这一行的最长形态（下面的 {@link #buttonLabelsFitTheirCells} 收这个）。
+     * ③ 它不比动作名短，所以排版上它是这一行的最长形态（下面的 {@link #buttonLabelsAreDistinctAndFitTheirCells} 收这个）。
      */
     @Test
     public void theSavedFeedbackIsTheRulingAndKeepsTheActionWord() {
@@ -144,17 +144,43 @@ public class SaveScreenTest {
     }
 
     /**
+     * 写入键的三条标签（他 2026-10-11 逐字「在覆盖的情况下“存档”的文字应变为“覆盖”（并且应为红色）」）。
+     *
+     * <p>钉的是**优先级**与**红色那一格的来源**，不是三条字符串本身（字符串逐字由上面那条与
+     * {@link #buttonLabelsAreDistinctAndFitTheirCells} 管）。两格各自挡一种错法：
+     * ① 选中一格有档、却又已经按过一次 ⇒ 画面留「已存档」——那一刻它是**回执**，不是预告，
+     * 覆盖态被回执盖住；② 绘制端的红是**从标签读出来的**（{@code L_OVERWRITE.equals(标签)}），
+     * 所以这里同时钉住"只有覆盖态那一个返回值会命中 {@code L_OVERWRITE}"——标签与颜色不可能一个说
+     * 覆盖、一个不红。这条静态接缝存在的理由就是这一格：判据放在实例里 JVM 测不到（见池件 §10 第 7 条
+     * 那条 M6 覆盖边界），放在静态面上就能钉。
+     */
+    @Test
+    public void theSaveKeyLabelFollowsLatchThenOccupancy() {
+        assertEquals("没选中或选中空格＝存进空槽", "存档", SaveScreen.saveLabel(false, false));
+        assertEquals("选中格已有档＝这一按毁掉一份现存的", "覆盖", SaveScreen.saveLabel(false, true));
+        assertEquals("已存档", SaveScreen.saveLabel(true, false));
+        assertEquals("回执盖过预告", "已存档", SaveScreen.saveLabel(true, true));
+        for (boolean latched : new boolean[]{false, true}) {
+            for (boolean occupied : new boolean[]{false, true}) {
+                String label = SaveScreen.saveLabel(latched, occupied);
+                assertEquals("红色那一格只该由「覆盖」给出：latch=" + latched + " occupied=" + occupied,
+                        "覆盖".equals(label), SaveScreen.L_OVERWRITE.equals(label));
+            }
+        }
+    }
+
+    /**
      * 两行六枚键的标签互不相同，且最长那枚仍放进最窄的一格。
      *
      * <p>不同名那条的理由照 {@code PauseScreenTest}：同名的两枚键在余光里读不出区别，而这一屏的
      * 「存档」与「已存档」是**同一枚键的两种时态**，所以它不进这一组两两比较（那对由上面那条钉）。
-     * 宽度那条是最便宜的一格保险：三格列宽 69，「上一页」三字 × 12 = 36 还有一半余量；哪天加一枚
-     * 「载入上一份」之类的长标签，红在这里比红在真机上便宜。
+     * ⚠ 「覆盖」是同一枚键的**第三种形**（选中格已有档），但它与其余六枚字面都不同，所以放得进这组
+     * 两两比较——放进来换到的是那条宽度保险：它是两字，与「存档」同长，红在这里比红在真机上便宜。
      */
     @Test
     public void buttonLabelsAreDistinctAndFitTheirCells() {
         String[] buttons = {SaveScreen.L_LOAD, SaveScreen.L_DELETE, SaveScreen.L_PREV,
-                SaveScreen.L_NEXT, SaveScreen.L_BACK, SaveScreen.L_SAVED};
+                SaveScreen.L_NEXT, SaveScreen.L_BACK, SaveScreen.L_SAVED, SaveScreen.L_OVERWRITE};
         for (int i = 0; i < buttons.length; i++) {
             for (int j = i + 1; j < buttons.length; j++) {
                 assertNotEquals("两枚键同名：" + buttons[i], buttons[i], buttons[j]);

@@ -68,6 +68,8 @@ public final class SaveScreen {
     static final String L_EMPTY = "空";
     static final String L_LOAD = "载入";
     static final String L_SAVE = "存档";
+    /** 他 2026-10-11 裁：选中格已有档时这一按是**毁掉一份现存的**，标签要说清是覆盖（同批裁了红色）。 */
+    static final String L_OVERWRITE = "覆盖";
     /** 裁定甲的反馈：按下写入之后**这枚键自己的标签**换成它，直到面板关闭。 */
     static final String L_SAVED = "已存档";
     static final String L_DELETE = "删除";
@@ -326,8 +328,7 @@ public final class SaveScreen {
      * 而"点了没反应、隔壁页悄悄少一份档"正是这一格唯一会被玩家判成 bug 的形状。
      */
     private boolean selectionLive() {
-        return !loading && selection != SaveSlots.NONE && slots.isOccupied(selection)
-                && selectionVisible();
+        return !loading && selectionOccupied() && selectionVisible();
     }
 
     /** 存档键单独一条：**没选中**是合法输入（写进第一个空槽，那条路得留在玩家手边）。 */
@@ -338,6 +339,22 @@ public final class SaveScreen {
     /** 选中格落不落在当前这一页（选中跟着页走是允许的，见 {@link #turnPage}）。 */
     private boolean selectionVisible() {
         return SaveLayout.onPage(page, selection);
+    }
+
+    /** 选中了一格、而且那一格已经有档——这一按下去就是毁掉一份现存的。 */
+    private boolean selectionOccupied() {
+        return selection != SaveSlots.NONE && slots.isOccupied(selection);
+    }
+
+    /**
+     * 写入键的标签（他 2026-10-11 裁：「在覆盖的情况下“存档”的文字应变为“覆盖”（并且应为红色）」）。
+     * 两条读法按**优先级**排：按下之后的回执（「已存档」）盖过一切——那一刻它已经在说"刚才那一下成了"，
+     * 再报"要覆盖"是答非所问；其余两形只看选中格有没有档。
+     * ⚠ 灰不灰是**另一条轴**（{@link #saveLive}）：选中格在隔壁页时这枚键点不动，可它仍然写着「覆盖」，
+     * 那说的是"这一按本来要毁掉谁"，不是"你现在能按"。
+     */
+    static String saveLabel(boolean latched, boolean occupied) {
+        return latched ? L_SAVED : occupied ? L_OVERWRITE : L_SAVE;
     }
 
     // ---- 绘制 -----------------------------------------------------------------------------
@@ -369,8 +386,9 @@ public final class SaveScreen {
         SaveLayout.actionCell(0, ra);
         drawFlatButton(c, ra, L_LOAD, kBtn, live, press.pressed() == IDX_LOAD, false);
         SaveLayout.actionCell(1, ra);
-        drawFlatButton(c, ra, savedLatched ? L_SAVED : L_SAVE, kBtn, saveLive(),
-                press.pressed() == IDX_SAVE, false);
+        String saveLabel = saveLabel(savedLatched, selectionOccupied());
+        drawFlatButton(c, ra, saveLabel, kBtn, saveLive(), press.pressed() == IDX_SAVE,
+                L_OVERWRITE.equals(saveLabel));   // 覆盖与删除同色：两枚都是"这一按会少一份档"
         SaveLayout.actionCell(2, ra);
         drawFlatButton(c, ra, L_DELETE, kBtn, live, press.pressed() == IDX_DELETE, true);
     }
