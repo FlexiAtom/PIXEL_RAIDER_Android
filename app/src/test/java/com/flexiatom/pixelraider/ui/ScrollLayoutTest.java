@@ -77,6 +77,22 @@ public class ScrollLayoutTest {
         assertEquals(0, ScrollLayout.clampOffset(-5, V, C_FULL));
     }
 
+    /**
+     * 按着视口区域拖（他 2026-10-13 逐字「我的建议是允许按着视口区域拖动」）。要钉的是**符号方向**：
+     * 手指上移（位移为负）要露出下面的内容，也就是偏移变大——写反的画面是"往上拖往下走"，
+     * 一种每一帧都在拖但方向全反的错，钳位测试抓不到它。
+     */
+    @Test
+    public void draggingInsideTheViewportFollowsTheFinger() {
+        assertEquals("上拖 10px 露 10px 内容（满装 90 对视口 80 正好整段溢出量）",
+                10, ScrollLayout.offsetForDrag(80, C_FULL, 0, -10));
+        assertEquals("下拖 5px 回到起点", 0, ScrollLayout.offsetForDrag(80, C_FULL, 5, 5));
+        assertEquals("拖过上界钳在 maxOffset，不回弹", 10, ScrollLayout.offsetForDrag(80, C_FULL, 8, -999));
+        assertEquals("拖过下界钳回 0", 0, ScrollLayout.offsetForDrag(80, C_FULL, 3, 999));
+        assertEquals("内容不溢出那一档，按视口拖也拖不出东西（常驻轨的代价，钳位照住）",
+                0, ScrollLayout.offsetForDrag(V, 80, 0, -50));
+    }
+
     @Test
     public void nonOverflowingContentGetsNoPhantomTravel() {
         // 钳位这一格是常驻轨新召进来的状态：8 行的稿（C=80）根本不溢出。

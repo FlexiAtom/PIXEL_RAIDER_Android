@@ -115,8 +115,10 @@ public class BriefingLayoutTest {
     }
 
     /**
-     * 视口取行距整数倍（80）时半行不再出现，代价也写在这：满装那一稿的拇指缩到 43，
-     * 低于可点下界 45，常驻轨于是只剩箭头拖得动。84 与 80 之间归他裁，不由版面替他选。
+     * 视口取行距整数倍（80）时半行不再出现；它原本的代价是"拇指缩到 43、低于可点下界 45"，
+     * 而这一格已被他 2026-10-13 逐字「我的建议是允许按着视口区域拖动」作废——拖的落点是整个视口，
+     * 拇指单抓抓不住不再决定拖不拖得动。⇒ <b>80 那一形没有代价了</b>，84 那形仍留着半行。
+     * 取 80 是<b>我</b>读他这句读出来的（他没写数），3-B 落地前可推翻。
      */
     @Test
     public void rowPitchViewportCostsThumbTouchability() {
@@ -127,5 +129,7 @@ public class BriefingLayoutTest {
         assertEquals(48, ScrollLayout.thumb(VIEWPORT_H, contentH));
         assertFalse(ScrollLayout.thumbTouchable(80, contentH));
         assertTrue(ScrollLayout.thumbTouchable(VIEWPORT_H, contentH));
+        assertEquals("拇指抓不住那一档，按着视口拖照样拖满", 10,
+                ScrollLayout.offsetForDrag(80, contentH, 0, -10));
     }
 }

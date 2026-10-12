@@ -36,7 +36,10 @@ import com.flexiatom.pixelraider.core.RectI;
  */
 public final class ScrollLayout {
 
-    /** 轨宽。MO 的原宽是 14，但常驻轨之后宽度是每行都付的**永久代价**，故取"拇指还能点"的最小档。 */
+    /**
+     * 轨宽。MO 的原宽是 14，但常驻轨之后宽度是每行都付的**永久代价**，故取"拇指还能点"的最小档。
+     * 这个 6 与下面那枚 6×9 的箭头是他 2026-10-13 逐字「你的自定可以」批下来的数，不是我自己钉的常量。
+     */
     public static final int TRACK_W = 6;
     /** 箭头高 = ⌈1.5×轨宽⌉。上下两枚合计 18 = 3×轨宽，行程就是视口减掉这一截。 */
     public static final int ARROW_H = 9;
@@ -84,6 +87,18 @@ public final class ScrollLayout {
     }
 
     /**
+     * **按着视口区域拖**（他 2026-10-13 逐字「我的建议是允许按着视口区域拖动」）：按下以后手指相对
+     * 按下点的位移 {@code dyFromDown}（屏幕坐标，向下为正）→ 内容偏移。手指上移露出下面的内容，
+     * 所以取负；整段钳在 {@code 0..maxOffset}，拖过界不报错也不回弹。
+     *
+     * <p>落点是**整个视口**，不只是拇指——这一格的存在让 {@link #thumbTouchable} 从"能不能拖"的
+     * 门槛降成"拇指画多长"的读数：拇指矮到抓不住时，按在文字上照样拖得动。
+     */
+    public static int offsetForDrag(int viewportH, int contentH, int startOffset, int dyFromDown) {
+        return clampOffset(startOffset - dyFromDown, viewportH, contentH);
+    }
+
+    /**
      * 拇指顶边在视口内的 y（含上箭头那一截）。偏移 0 贴顶，偏移满时拇指底边正好吻上下箭头顶。
      */
     public static int thumbTop(int viewportH, int contentH, int offset) {
@@ -118,7 +133,11 @@ public final class ScrollLayout {
         out.set(trackLeft, top, trackLeft + TRACK_W, top + thumb(viewportH, contentH));
     }
 
-    /** 拇指这一档到底点不点得着（不点得着时轨只作读数、不接受区内拖动）。 */
+    /**
+     * 拇指这一档<b>单抓</b>抓不抓得住——它只是"拇指画多长"的读数，<b>不是</b>能不能拖的前提：
+     * 他 2026-10-13 逐字「我的建议是允许按着视口区域拖动」之后，拖的落点是整个视口（{@link #offsetForDrag}），
+     * 拇指矮过下界那一档仍然拖得动，只是不能拿指头去掐那条 6px 宽的皮。
+     */
     public static boolean thumbTouchable(int viewportH, int contentH) {
         return thumb(viewportH, contentH) >= MIN_THUMB;
     }
