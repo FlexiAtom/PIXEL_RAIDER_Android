@@ -54,6 +54,8 @@ public final class WaveFlow {
     private volatile Mode mode = Mode.CAMPAIGN;
 
     private int wave;
+    /** 本局第一波的<b>全局</b>波号，只喂给 {@link #enterPrep} 那句首波宽限（理由见 {@link #beginAtChapter}）。 */
+    private int startWave = 1;
     private int phase = PREP;
     private float phaseLeft;
     private float gapLeft;
@@ -82,9 +84,31 @@ public final class WaveFlow {
         this.mode = mode;
     }
 
-    /** 开局与 {@code resetRun} 都走这里：波号回到 1，队列重新抽。 */
+    /**
+     * 开局与 {@code resetRun} 都走这里：波号回到 1，队列重新抽。
+     *
+     * <p>它等于"从第一章起"，所以战役基线（40 波通关、首波宽限）一字节不动。
+     */
     public void begin() {
-        wave = 1;
+        beginAtChapter(1);
+    }
+
+    /**
+     * 从第 {@code chapter} 章的第一波起一局——选关页那条链的落点（池件 {@code campaign-data-tree} 批3-B）。
+     *
+     * <p><b>只改起点，不改终局。</b>局末出口仍恒在 {@code maxWave}（{@link #closeWave} 那条 ⚠ 写的是
+     * "换成章末的相对阈值"，那一格<b>仍欠他一句</b>：把它顺手落进这一批，今天那条"40 波通关"的基线
+     * 当场变成"5 波通关"，而基线是真机验过的出口（#54）。起点与终点分得开，正是这一批只动一边的理由。
+     *
+     * <p>{@code startWave} 记下来只为 {@link #enterPrep} 那一句首波宽限：那条规则说的是"<b>本局</b>
+     * 第一波不立刻被贴脸"，不是"全局第 1 波"。从第八章起一局的人同样要那段喘息。
+     *
+     * <p>它<b>不进快照</b>：宽限只在"进新一波的 PREP"那一刻读，而读档恢复的是<b>已经拍下来的相位与计时</b>，
+     * 那一刻已经过去了。剩下会读它的每一波都满足 {@code wave != startWave}，与它是 1 时行为一致。
+     */
+    public void beginAtChapter(int chapter) {
+        startWave = mode.firstWaveOfChapter(chapter);
+        wave = startWave;
         guaranteeChips = 0;
         enterPrep();
     }
@@ -213,9 +237,10 @@ public final class WaveFlow {
         kindCount = 0;
         cursor = 0;
         gapLeft = 0f;
-        // 首波多给一段准备时间：规格要求开局不立刻被贴脸。
+        // 首波多给一段准备时间：规格要求开局不立刻被贴脸。判据是"**本局**第一波"而不是全局第 1 波——
+        // 选关页从第八章起一局时，那一局同样有开局（见 {@link #beginAtChapter}）。
         phaseLeft = Balance.wave.bannerSec
-                + (wave == 1 ? Balance.wave.firstWaveDelay : 0f);
+                + (wave == startWave ? Balance.wave.firstWaveDelay : 0f);
     }
 
     private void buildQueue() {
@@ -243,6 +268,9 @@ public final class WaveFlow {
         // ⚠ 阈值今天恒等于全局 maxWave（40），因为战役的<b>波号是全局的</b>（八章＝40 波，见
         // {@link Mode#chapterForWave} 那条理由）。批3 的选关页一旦能"从第 k 章起一局"，这一格要换成
         // 章末的<b>相对</b>阈值——那是本方法剩下的唯一一分叉，别再往别处加判据。
+        //
+        // **批3-B 落了起点、没落这一格**（{@link #beginAtChapter}）：换成章末会让今天这条"40 波通关"
+        // 当场变成"5 波通关"，而那条出口是真机验过的（#54）。"一任务＝一章、章末即通关"仍是他的待裁。
         if (mode.hasVictory() && wave >= Balance.wave.maxWave) {
             phase = VICTORY;
             return;

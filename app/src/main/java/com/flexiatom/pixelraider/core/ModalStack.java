@@ -41,6 +41,11 @@ public final class ModalStack {
      * 停下来存一份"，不是"这一波打完了"，BGM 因此不该重开（口径见 {@code Game.bgmTrackNow}）。
      */
     public static final int SAVE = 9;
+    /**
+     * 战役选关页（池件 {@code campaign-data-tree} 批3-B），从主菜单进。叠在 MENU 之上：关掉它
+     * 菜单还在原地，与 GROWTH 同款。它也不催 BGM——那一条口径见 {@code Game.bgmTrackNow}。
+     */
+    public static final int CAMPAIGN = 10;
 
     private final int[] stack = new int[8];
     private int size;

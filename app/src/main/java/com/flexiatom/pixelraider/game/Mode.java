@@ -27,8 +27,10 @@ package com.flexiatom.pixelraider.game;
  * 就会长成 [规格 §8.5] 判过的那种"散落判断"。
  *
  * <p><b>它只带两枚字段</b>（{@code campaign} 与 {@link Tier}），<b>不带 chapter</b>：章由波号推得出
- * （{@link #chapterForWave}，八章＝40 波 ＝ {@code wavesPerZone} 那条既有星区界），今天没有任何读者
- * 需要"这一局从第几章起"——选关页与存档（批2/批3）才有那枚读取点。提前加字段就是提前设计。
+ * （{@link #chapterForWave}，八章＝40 波 ＝ {@code wavesPerZone} 那条既有星区界）。选关页要的那枚
+ * "这一局从第几章起"落在<b>开局那一步</b>（{@code WaveFlow.beginAtChapter} 把章号换成起始波号），
+ * 落定之后本局再没有读者——波号本身就把章号带着。所以它<b>不进 Mode</b>：进了就有两份真值
+ * （字段与当前波号），而存档侧只持久化波号，字段那份会在读档之后与波号不一致。
  *
  * <p><b>战役侧＝今天的基线，一字节不动</b>：对数敌数、逐只出怪、恒 1 的 hp 增长、40 波终局。
  * 主菜单那枚开局键因此仍走 {@link #CAMPAIGN}——这不是妥协而是刻意的：<i>把默认设成无尽会让已交付的
@@ -132,6 +134,21 @@ public final class Mode {
         if (wave < 1) return 0;
         int c = (wave - 1) / Balance.wave.wavesPerZone + 1;
         return c < chapterCount() ? c : chapterCount();
+    }
+
+    /**
+     * 第 {@code chapter} 章的<b>第一波</b>（全局波号）——{@link #chapterForWave} 的另一向。
+     *
+     * <p>正解只有这一条除法反过来的那一个数：波号仍是<b>全局的</b>（类注释那条"章号只切叙事与 Boss
+     * 节拍，不切数值"），所以"从第 3 章起一局"＝从第 11 波起，敌数曲线不重启、不重排。
+     *
+     * <p>越界<b>夹</b>而不抛：输入来自选关页的手指（以及以后的"继续战役"那类读数），一个读数是 9 的
+     * 调用把整局重置炸掉不划算，夹到第八章的后果是"打的是最后一章"，玩家看得见也解释得清。
+     */
+    public int firstWaveOfChapter(int chapter) {
+        int count = chapterCount();
+        int c = chapter < 1 ? 1 : (chapter > count ? count : chapter);
+        return (c - 1) * Balance.wave.wavesPerZone + 1;
     }
 
     /** 章数＝{@code maxWave / wavesPerZone}，与那条 [规格] "40 波 8 星区"同源（1.45^n 那条 8 轮 Boss 同它）。 */

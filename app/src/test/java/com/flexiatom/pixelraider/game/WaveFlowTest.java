@@ -68,6 +68,33 @@ public class WaveFlowTest {
     }
 
     /**
+     * 选关页那条链的落点（{@link WaveFlow#beginAtChapter}，批3-B）：<b>首波宽限跟着"本局第一波"走</b>，
+     * 不跟着全局第 1 波——从第八章起一局的人同样要那段喘息。
+     *
+     * <p>量法不数秒，只读 {@code phaseLeft} 这一个数：PREP 拍下的一刻它等于
+     * {@code bannerSec + firstWaveDelay}（本局首波）或 {@code bannerSec}（此后每一波）。两档各处一次，
+     * 于是"宽限付给了谁"与"只付一次"由同一条用例钉住。
+     *
+     * <p>波号 36 是<b>写死的数</b>而不是现调 {@code firstWaveOfChapter(8)}：断言复用被测的那条除法，
+     * 除法错了也照样绿。这一格同时是 {@code StateSnapshotTest} 把 {@code startWave} 列进 skip 的那次
+     * 表态的正面读数——读档不重放宽限（{@code phaseLeft} 存了），而下一波判 {@code wave != startWave}
+     * 时 {@code wave} 也存了。
+     */
+    @Test
+    public void chapterStartGracesItsOwnFirstWave() {
+        WaveFlow f = new WaveFlow(new WaveDirector(), new Rng(7L));
+        f.beginAtChapter(Mode.CAMPAIGN.chapterCount());
+        int lastChapterFirst = Balance.wave.maxWave - Balance.wave.wavesPerZone + 1;
+        assertEquals("章号换成起始波号：第八章＝全局第 36 波，敌数曲线不重启", 36, lastChapterFirst);
+        assertEquals(lastChapterFirst, f.wave());
+        assertEquals("本局首波付宽限", Balance.wave.bannerSec + Balance.wave.firstWaveDelay,
+                f.phaseLeft(), 1e-5f);
+
+        advanceToWave(f, lastChapterFirst + 1);
+        assertEquals("此后每一波只剩横幅", Balance.wave.bannerSec, f.phaseLeft(), 1e-5f);
+    }
+
+    /**
      * {@code debugReachFinalWave}（F8 取证键）只推**波号与队列**，通关本身仍由真的那条路判出来：
      * 空队列 ⇒ 下一帧 {@code CLEAR} ⇒ 场上没敌人时 {@code closeWave} 自己走到 {@code VICTORY}。
      *

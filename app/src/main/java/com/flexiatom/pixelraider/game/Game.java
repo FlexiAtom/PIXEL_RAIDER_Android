@@ -47,6 +47,7 @@ import com.flexiatom.pixelraider.plat.AsyncSaveSink;
 import com.flexiatom.pixelraider.plat.KeyValue;
 import com.flexiatom.pixelraider.plat.QualityProfile;
 import com.flexiatom.pixelraider.plat.Screen;
+import com.flexiatom.pixelraider.ui.CampaignScreen;
 import com.flexiatom.pixelraider.ui.DebugScreen;
 import com.flexiatom.pixelraider.ui.GrowthScreen;
 import com.flexiatom.pixelraider.ui.HudLayout;
@@ -315,6 +316,11 @@ public final class Game implements GameThread.Host {
      * <b>它不持有任何槽位数据</b>——画两形读的是 {@link #saveSlots} 那本账的引用（{@code open} 时递进去）。
      */
     private final SaveScreen savePage = new SaveScreen(font, uiText, glow);
+    /**
+     * 战役选关页（八条任务 + 简报 + 难度 + 键行，从主菜单进）。同上。
+     * <b>它不碰规则层</b>：选中的任务号与档号存在页里，开局那一步由 {@link #resetRun(Mode, int)} 现读。
+     */
+    private final CampaignScreen campaignPage = new CampaignScreen(font, uiText, glow);
     /** 局内成长：商店卡买到的等级与五个乘子（局外那套在 {@link #growth}，两套互不覆盖）。 */
     private final ShopRun shopRun = new ShopRun();
     /**
@@ -335,6 +341,8 @@ public final class Game implements GameThread.Host {
     private float debugAtUi;
     /** 进入存档页的界面时刻。同上（整页待遇，入场原点与 {@code growthAtUi} 那一族同一个角色）。 */
     private float saveAtUi;
+    /** 进入战役选关页的界面时刻。同上（整页待遇的入场原点，与 {@code saveAtUi} 同一角色）。 */
+    private float campaignAtUi;
     /**
      * 是否 debug 构建（FLAG_DEBUGGABLE）。由 plat 在启动时注入，决定暂停页那枚「调试」入口画不画——
      * 正式包不注册它的命中也不淡入，与 {@code PauseScreen} 里"未落地的出口整条剔除"同一条口径。
@@ -865,10 +873,11 @@ public final class Game implements GameThread.Host {
         radarHit.set(radarDraw.left, radarDraw.top, radarDraw.right, radarDraw.bottom);
         radarHit.offsetInPlace(0, m.hudTop());
         result.layout(hitBoxLogic, m.pageTop(result.pageHeight()), m.logicH);
-        // 三张固定页各自报整页高，居中原点由 pageTop 给（口径同结算页，不跟着战场长高）
+        // 四张固定页各自报整页高，居中原点由 pageTop 给（口径同结算页，不跟着战场长高）
         menu.layout(hitBoxLogic, m.pageTop(menu.pageHeight()), m.logicH);
         growthPage.layout(hitBoxLogic, m.pageTop(growthPage.pageHeight()), m.logicH);
         savePage.layout(hitBoxLogic, m.pageTop(savePage.pageHeight()), m.logicH);
+        campaignPage.layout(hitBoxLogic, m.pageTop(campaignPage.pageHeight()), m.logicH);
         // 面板走整张逻辑画布坐标（要在 320~560 上分账图表与卡片），另需安全区让它从挖孔带让开
         layoutPausePanel();
         shop.layout(m.logicH, m.safeTop, m.safeBottom, hitBoxLogic);
@@ -984,8 +993,9 @@ public final class Game implements GameThread.Host {
      * 是不是 Boss 波"派生，而"同轨不动"那一条判断只有一份、住在播放面那边。
      *
      * <p>暂停/商店/调试**不改轨**（它们是"打到一半"）：换轨在听觉里就是"这一局结束了"的信号，
-     * 按一次暂停就听见一次终局是假话。主菜单、成长页、图鉴、设置、结算页归到同一条 MENU 轨——
-     * 那五屏都是"没在打"。
+     * 按一次暂停就听见一次终局是假话。主菜单、战役选关页、成长页、图鉴、设置、结算页归到同一条 MENU
+     * 轨——那六屏都是"没在打"。选关页不必像存档页那样查栈：它只有一个宿主（从主菜单进），今天没有
+     * "打到一半去选关"这条路。
      *
      * <p>存档页是这一族里唯一**宿主不固定**的一屏（暂停页与主菜单两处入口共用），所以它跟着栈里
      * 有没有菜单来定轨，而不是跟着自己：从菜单进来是"找一份档续玩"＝没在打；从暂停页进来还是
@@ -994,7 +1004,8 @@ public final class Game implements GameThread.Host {
     private int bgmTrackNow() {
         int top = modals.peek();
         if (top == ModalStack.MENU || top == ModalStack.GROWTH || top == ModalStack.RESULT
-                || top == ModalStack.CODEX || top == ModalStack.SETTINGS) {
+                || top == ModalStack.CODEX || top == ModalStack.SETTINGS
+                || top == ModalStack.CAMPAIGN) {
             return AudioCues.BGM_MENU;
         }
         if (top == ModalStack.SAVE && modals.contains(ModalStack.MENU)) {
@@ -1432,6 +1443,10 @@ public final class Game implements GameThread.Host {
             growthPage.pressDown(x, y, time.ui() - growthAtUi, id);
             return;
         }
+        if (top == ModalStack.CAMPAIGN) {
+            campaignPage.pressDown(x, y, time.ui() - campaignAtUi, id);
+            return;
+        }
         if (pauseHit.contains(x, y)) {
             openPause();
             return;
@@ -1487,6 +1502,8 @@ public final class Game implements GameThread.Host {
             onMenuPointerUp(menu.pressUp(x, y, time.ui() - menuAtUi, id));
         } else if (top == ModalStack.GROWTH) {
             onGrowthPointerUp(growthPage.pressUp(x, y, time.ui() - growthAtUi, id));
+        } else if (top == ModalStack.CAMPAIGN) {
+            onCampaignPointerUp(campaignPage.pressUp(x, y, time.ui() - campaignAtUi, id));
         } else if (top == ModalStack.RESULT) {
             onResultPointerUp(result.pressUp(x, y, id));
         }
@@ -1543,16 +1560,48 @@ public final class Game implements GameThread.Host {
         menu.clearPress();
     }
 
-    /** 主菜单的三枚出口：开新局、去成长页花芯片、开存档页续玩**哪**一份（他 10-11 自纠后用的就是"哪"）。 */
+    /** 主菜单的三枚出口：进选关页挑一局、去成长页花芯片、开存档页续玩**哪**一份（他 10-11 自纠后用的就是"哪"）。 */
     private void onMenuPointerUp(int action) {
         if (action == MenuScreen.ACTION_RUN) {
-            restartFade = 1f;
-            resetRun(Mode.CAMPAIGN);    // 里面那句 popUntil(NONE) 顺手把这一页收掉
+            openCampaign();     // 战役选关页（批3-B）：这一枚键从今天起**不再直接开局**，理由见 openCampaign
         } else if (action == MenuScreen.ACTION_GROWTH) {
             openGrowth();
         } else if (action == MenuScreen.ACTION_SAVE) {
             // false：菜单底下没有"正在打的这一局"可拍（这一局已被放弃，理由见 openMenu），所以页内只有载入与删除
             openSave(false);
+        }
+    }
+
+    /**
+     * 开战役选关页：压在菜单之上，与 {@link #openGrowth} 同一形态（时钟本就冻着，这里再冻一次是幂等；
+     * 返回键掀回菜单）。
+     *
+     * <p><b>主菜单那枚「开始新一局」的落点由"直接开局"改成了"进这一页"</b>——这不是把那条链换掉，
+     * 是把它往后挪了一格：页的默认选中的正是「任务 1 ＋ 普通」，而那两者的开局波号与乘子逐字节等于
+     * 今天{@link #resetRun(Mode) resetRun(Mode.CAMPAIGN)}的结果（{@code CampaignScreen.open} 的注释
+     * 钉的就是这条）。所以老路径没丢，只是多了一屏可以按「返回」退出去。
+     */
+    private void openCampaign() {
+        modals.push(ModalStack.CAMPAIGN);
+        campaignPage.open();
+        dropMoveInput();
+        time.setPaused(true);
+        campaignAtUi = time.ui();
+    }
+
+    /**
+     * 选关页报上来的两枚出口。<b>页只管"选中的是哪一局"，改现场的全在本类</b>（口径同
+     * {@link #onSavePointerUp}）：返回掀回菜单，开始任务才落进 {@link #resetRun(Mode, int)}。
+     */
+    private void onCampaignPointerUp(int action) {
+        if (action == CampaignScreen.ACTION_BACK) {
+            modals.pop();
+            return;
+        }
+        if (action == CampaignScreen.ACTION_START) {
+            restartFade = 1f;
+            // 现读，不从动作码里带：面板换任务与换档都报 ACTION_NONE，选中值只有它自己知道
+            resetRun(Mode.campaign(campaignPage.selectedTier()), campaignPage.selectedMission());
         }
     }
 
@@ -1608,6 +1657,10 @@ public final class Game implements GameThread.Host {
         }
         if (top == ModalStack.GROWTH) {
             growthPage.pressDrag(x, y, time.ui() - growthAtUi, id);
+            return;
+        }
+        if (top == ModalStack.CAMPAIGN) {
+            campaignPage.pressDrag(x, y, time.ui() - campaignAtUi, id);
             return;
         }
         if (top == ModalStack.RESULT) {
@@ -2783,16 +2836,26 @@ public final class Game implements GameThread.Host {
         wave.setMode(mode);
     }
 
+    /** 从第一章起的一整局重置——冷启动、暂停页重开、结算页重试这三枚老调用点用的都是这一枚。 */
+    public void resetRun(Mode mode) {
+        resetRun(mode, 1);
+    }
+
     /**
-     * 整局重置（死亡后重开、以及 surfaceChanged 的一次性初始化）。
+     * 整局重置（死亡后重开、冷启动、以及从选关页开的那一局）。
      *
      * <p>模式与档在**这一格**落定——[规格 §8.5] 那句"档跟着一整局走"落到代码上就是"只有这里能换"：
      * 中途换会把已刷出的怪和接下来要刷的怪切成两套规则，HUD 那条"敌人"进度条的分母当场与队列不符。
-     * 今天四个调用点都传 {@link Mode#CAMPAIGN}（无尽侧的分叉已在逻辑核落地并有测试，但它的<b>入口</b>
-     * 随选关页一起落，见 {@code Mode} 类注释那条"为什么默认是战役"），所以这一格的形参现在恒为基线，
-     * 但它已经是**唯一**那条通道：漏染只可能出在这里，不必去别处找谁写了 mode。
+     * {@code mode} 的三个调用点传 {@link Mode#CAMPAIGN}，选关页那一个传
+     * {@link Mode#campaign(Tier)}——今天只有这一格能把档换掉（无尽侧的分叉已在逻辑核落地并有测试，
+     * 它的<b>入口</b>仍未接，见 {@code Mode} 类注释那条"为什么默认是战役"）。
+     *
+     * <p>{@code mission} 是<b>起点</b>章号（1 起，与选关页那八条任务同一口径），它只改{@link WaveFlow#beginAtChapter}
+     * 的那一步：局末出口照旧恒在 {@code maxWave}。这一批刻意只动起点——把"打完本章即通关"顺手落进这里，
+     * 今天那条真机验过的"40 波通关"基线会当场变成"5 波通关"，而那一格是他还没裁的（池件
+     * {@code campaign-data-tree} §2 的第 2 条待测）。
      */
-    public void resetRun(Mode mode) {
+    public void resetRun(Mode mode, int mission) {
         applyMode(mode);
         enemies.clear();
         // 指定挂在**敌池槽号**上，池子清空后那个 (槽号, born) 对就成了悬空引用。每帧
@@ -2863,7 +2926,7 @@ public final class Game implements GameThread.Host {
         player.py = player.y;
         anchorX = player.x;
         anchorY = player.y;
-        wave.reset();
+        wave.beginAtChapter(mission);
         // 开新局的声音挂在**这一格**而不是那三个调用点（重开/重试/菜单开局）：它们是同一个事件的
         // 三个入口，写三处就有第四处漏掉的那天。冷启动那一次多半听不见——播放面还没 ready。
         audio.play(AudioCues.RUN_START);
@@ -3022,11 +3085,12 @@ public final class Game implements GameThread.Host {
         drawSweepFlash(c, top);
         probe.end(FrameProbe.FX);
         int modal = modals.peek();
-        // 四张**整页**模态（结算 / 主菜单 / 成长 / 存档）共用一套待遇：自己报整页高、在画布里居中、
+        // 五张**整页**模态（结算 / 主菜单 / 成长 / 存档 / 选关）共用一套待遇：自己报整页高、在画布里居中、
         // 不跟着战场长高，并且把 HUD 与波次横幅一起让位。这个布尔是那条待遇的**唯一**判据——
         // 分两处各列一遍模态号的写法，迟早会有一处忘记加新页（表现为"菜单底下亮着血条"）。
         boolean pageModal = modal == ModalStack.RESULT
-                || modal == ModalStack.MENU || modal == ModalStack.GROWTH || modal == ModalStack.SAVE;
+                || modal == ModalStack.MENU || modal == ModalStack.GROWTH || modal == ModalStack.SAVE
+                || modal == ModalStack.CAMPAIGN;
         probe.begin(FrameProbe.MODAL);
         if (pageModal) {
             int pageSave = c.save();
@@ -3041,6 +3105,9 @@ public final class Game implements GameThread.Host {
                 savePage.setLoading(loadInFlight());
                 c.translate(0f, metrics.pageTop(savePage.pageHeight()));
                 savePage.draw(c, time.ui() - saveAtUi);
+            } else if (modal == ModalStack.CAMPAIGN) {
+                c.translate(0f, metrics.pageTop(campaignPage.pageHeight()));
+                campaignPage.draw(c, time.ui() - campaignAtUi);
             } else {
                 c.translate(0f, metrics.pageTop(result.pageHeight()));
                 result.draw(c, sheet, time.ui() - resultAtUi);

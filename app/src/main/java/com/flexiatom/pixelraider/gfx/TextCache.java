@@ -239,6 +239,23 @@ public final class TextCache {
         return b.getHeight();
     }
 
+    /**
+     * 文本宽度（逻辑像素），**只量不烘**。折行要的是"这段子串多宽"，一个候选切点量一次；
+     * 若让它走 {@link #bake}，折行探过的每一条子串都会进槽、把真正上屏的那几行从 LRU 里挤出去
+     * ——缓存会退化成"每次重烘"。所以这里复刻 {@link #render} 的量的口径（同一张脸、同一个吸附值、
+     * 同一次 {@code measureText} 取整），但不碰槽位、不建贴图。
+     *
+     * <p>口径必须与 {@code render} 逐字一致，否则折行算出的行宽与上屏的实际行宽会差半格，
+     * 右边对齐的读数就会串列。
+     */
+    public int widthOf(String text, int px) {
+        if (text == null || text.isEmpty()) return 0;
+        px = snapToGrid(px);
+        BAKE.setTypeface(faceOf(px));
+        BAKE.setTextSize(px);
+        return Math.max(1, Math.round(BAKE.measureText(text)));
+    }
+
     private void evictOne() {
         int oldest = -1, oldStamp = Integer.MAX_VALUE;
         for (int j = 0; j < CAP; j++) {

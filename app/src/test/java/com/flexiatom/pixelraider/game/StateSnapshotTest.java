@@ -227,6 +227,11 @@ public class StateSnapshotTest {
      * <p>{@code kinds} 在探针这里列进 skip 不是因为不存，而是因为<b>数组尾巴不该比</b>——
      * {@code ensure(count)} 只保证前 {@code count} 格，源池的容量可能比目标大。
      * 尾巴由 {@link WaveFlow#spawnKindAt} 那条越界返回 {@code NONE} 的判据替代，比的是"读得出的那几格"。
+     *
+     * <p>{@code startWave} 列进 skip 才是"不存"的那一格，这是 {@link WaveFlow#beginAtChapter} 那条理由的
+     * 表态（宽限只在"进新一波的 PREP"那一刻读，读档恢复的是<b>已经拍下来的 {@code phaseLeft}</b>，
+     * 那一刻过去了）。它由 {@code WaveFlowTest#chapterStartGracesItsOwnFirstWave} 那条量出来，
+     * 不在这里比字节。
      */
     @Test
     public void 波次段带队列与游标绝对位置() {
@@ -236,7 +241,8 @@ public class StateSnapshotTest {
             for (int i = 0; i < 2_000 && src.phase() != WaveFlow.SPAWN; i++) src.pollSpawn(1f / 30f, 0);
             assertEquals("用例前提：队列已经建起来了", WaveFlow.SPAWN, src.phase());
 
-            SnapProbe.poisonBy(src, boolsAllTrue, "kinds", "weights", "director", "rng", "mode");
+            SnapProbe.poisonBy(src, boolsAllTrue,
+                    "kinds", "weights", "director", "rng", "mode", "startWave");
             // 相位上界是 VICTORY=4、游标上界是队列长度——两处校验逼着把这两个数灌回合法区间。
             SnapProbe.set(src, "phase", WaveFlow.SPAWN);
             SnapProbe.set(src, "cursor", 1);
@@ -246,14 +252,15 @@ public class StateSnapshotTest {
                 // 队列只认表内的 kind 或 BOSS：灌个互不相同又都在表内的数（0 与默认值同形，避开）。
                 q[i] = i == 0 ? WaveFlow.BOSS : 1 + (i % Balance.Enemy.BURSTER);
             }
-            SnapProbe.assertPoisoned(src, "kinds", "weights", "director", "rng", "mode");
+            SnapProbe.assertPoisoned(src, "kinds", "weights", "director", "rng", "mode", "startWave");
 
             Buf.Reader r = segmentOf(src, src::writeSnapshot);
             WaveFlow dst = new WaveFlow(new WaveDirector(), new Rng(1L));
             dst.restoreSnapshot(r);
             assertEquals("波次段必须一口不剩", 0, r.remaining());
 
-            SnapProbe.assertFieldsEqual(src, dst, "kinds", "weights", "director", "rng", "mode");
+            SnapProbe.assertFieldsEqual(src, dst,
+                    "kinds", "weights", "director", "rng", "mode", "startWave");
             int n = SnapProbe.getInt(src, "kindCount");
             for (int i = 0; i < n; i++) {
                 assertEquals("队列第 " + i + " 格（决定接下来刷什么）",
