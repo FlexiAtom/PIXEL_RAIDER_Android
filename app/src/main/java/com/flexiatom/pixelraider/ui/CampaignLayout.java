@@ -33,19 +33,21 @@ import com.flexiatom.pixelraider.plat.Screen;
  * {@code CampaignScreen.layout} 加一次。
  *
  * <p><b>这根竖轴是一条等式，不是四个挑来的数</b>：
- * {@code 6 + 118 + 4 + 90 + 4 + 45 + 4 + 45 = 316 ≤ Screen.LOGIC_H_MIN(320)}，
+ * {@code 6 + 118 + 4 + 80 + 4 + 45 + 4 + 45 = 306 ≤ Screen.LOGIC_H_MIN(320)}，
  * 由测试把最后一格钉住。分配的理由只有两条，都在下面各自的字段上：
- * ① 两枚按钮带<b>按绘制尺寸就够 48dp 触控下界</b>（{@link #CELL_H}），所以这一屏的命中区
+ * ① 两枚按钮带<b>按绘制尺寸就够触控下界</b>（{@link #CELL_H}），所以这一屏的命中区
  * 对它们<b>不外扩</b>——分段控件三格并排，外扩到 45 会互相吞掉相邻段；
  * ② 余量全给简报视口，因为它是这一屏唯一会长高的东西。
  *
- * <p><b>视口取 90 = 9×{@link BriefingLayout#LINE_STEP}</b>：整行数的下界，于是"满装"与"半行"
- * 不会同时发生。他那两份实例的正文（背景三行＋目标两条，无折行）合计 8 行 80 格，上限用满也只有
- * 9 行 90 格，<b>两档都正好装得下</b>——轨仍常驻（他 2026-10-13 逐字「所以是正常也超限？那就正常情况
- * 也用轨」），溢出与否由文案自己决定。不溢出时拇指等于行程 72（{@code 90 − 2×9}）；<b>一旦有人把
- * 简报写长</b>（例如 12 行 120 格）拇指按 {@code 行程²/内容} 缩到 43，会矮过
- * {@link ScrollLayout#MIN_THUMB}——那一档在这一屏<b>不再是门槛</b>：拖的落点本来就是整个视口，
- * 拇指抓不住也拖得动（{@link ScrollLayout#offsetForDrag}，他 10-13 裁的甲）。
+ * <p><b>视口取 80 = 8×{@link BriefingLayout#LINE_STEP}</b>，这一格是<b>整行数的下界</b>与<b>校验有没有第二个答案</b>
+ * 两者的交点：现文案八份都是 8 行（首行＋两枚空行＋背景 3＋目标 2，无折行）＝ 80 格，<b>正好装满、不溢出</b>；
+ * 而他给的上限用满（背景 3＋目标 3）是 9 行 90 格，对 80 的视口<b>溢出 10px</b>。视口若取 90，连上限那一档
+ * 也装得下，于是"会不会出条"这道校验永远只回答"否"——而他 2026-10-12 逐字说的正是
+ * 「上限在代码里校验，但是为了是否出现滚动条而校验」：那道校验得有第二个答案可给，视口才准是 80。
+ * 轨<b>照旧常驻</b>（他 10-13 逐字「所以是正常也超限？那就正常情况也用轨」），今天不溢出的那八份稿
+ * 就画一条等于行程的拇指（{@code 80 − 2×9 = 62}，过 {@link ScrollLayout#MIN_THUMB}）。
+ * 上限那一档拇指按 {@code 行程²/内容} 缩到 43、矮过 45——<b>不再是门槛</b>：拖的落点本来就是整个视口，
+ * 拇指单抓抓不住也拖得动（{@link ScrollLayout#offsetForDrag}，他 10-13 裁的甲）。
  *
  * <p>这里不写"每行几格字"以外的字号真值：汉字档位归 {@link Md3}，简报档归
  * {@link BriefingLayout#GLYPH_H}，抄一份数字就等于给"改字阶忘了改行高"留缝。
@@ -79,24 +81,24 @@ public final class CampaignLayout {
     public static final int GROUP_GAP = 4;
 
     public static final int BRIEF_TOP = LIST_BOTTOM + GROUP_GAP;              // 128
-    /** 视口高＝9 行整。理由见类注释那两条，测试钉它与 LINE_STEP 成套。 */
-    public static final int VIEWPORT_H = 9 * BriefingLayout.LINE_STEP;        // 90
-    public static final int BRIEF_BOTTOM = BRIEF_TOP + VIEWPORT_H;            // 218
+    /** 视口高＝8 行整。两档读数（现文案装满／上限溢出 10）都在类注释里，测试钉它与 LINE_STEP 成套。 */
+    public static final int VIEWPORT_H = 8 * BriefingLayout.LINE_STEP;        // 80
+    public static final int BRIEF_BOTTOM = BRIEF_TOP + VIEWPORT_H;            // 208
 
-    public static final int TIER_TOP = BRIEF_BOTTOM + GROUP_GAP;              // 222
+    public static final int TIER_TOP = BRIEF_BOTTOM + GROUP_GAP;              // 212
     /**
      * 难度分段与键行共用的高度：{@code Screen.minTouchLogic} 的真机读数上界是 45
      * （口径同 {@link ScrollLayout#MIN_THUMB}，那里逐字写过为什么按最坏的一档钉）。
      * 这两带按<b>绘制尺寸</b>就够界，于是它们不需要外扩命中区——分段控件三格并排，外扩必互吞。
      */
     public static final int CELL_H = 45;
-    public static final int TIER_BOTTOM = TIER_TOP + CELL_H;                  // 267
+    public static final int TIER_BOTTOM = TIER_TOP + CELL_H;                  // 257
 
-    public static final int KEY_TOP = TIER_BOTTOM + GROUP_GAP;                // 271
-    public static final int KEY_BOTTOM = KEY_TOP + CELL_H;                    // 316
+    public static final int KEY_TOP = TIER_BOTTOM + GROUP_GAP;                // 261
+    public static final int KEY_BOTTOM = KEY_TOP + CELL_H;                    // 306
 
     /** 整页高：必须 ≤ {@code Screen.LOGIC_H_MIN}，否则最矮画布上这一页装不下自己的命中框。 */
-    public static final int PAGE_H = KEY_BOTTOM;                              // 316
+    public static final int PAGE_H = KEY_BOTTOM;                              // 306
 
     /** 难度三格／键行两格共用的格间距。 */
     public static final int CELL_GAP = 4;

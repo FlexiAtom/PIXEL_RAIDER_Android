@@ -19,6 +19,7 @@
 package com.flexiatom.pixelraider.ui;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
@@ -34,8 +35,8 @@ import org.junit.Test;
 /**
  * 战役选关页的几何与静态面。期望值**手推写死**（照 {@link SaveLayoutTest} 的规矩）。
  *
- * <p>这一屏要钉的不是"挤不挤"，是<b>那根竖轴是一条等式而不是四个挑来的数</b>：页高 316 由
- * {@code 6 + 118 + 4 + 90 + 4 + 45 + 4 + 45} 加出来，最后一格必须 ≤ {@code Screen.LOGIC_H_MIN}。
+ * <p>这一屏要钉的不是"挤不挤"，是<b>那根竖轴是一条等式而不是四个挑来的数</b>：页高 306 由
+ * {@code 6 + 118 + 4 + 80 + 4 + 45 + 4 + 45} 加出来，最后一格必须 ≤ {@code Screen.LOGIC_H_MIN}。
  * 算错一格的画面是"最矮的那台机器上最后一行键的命中框掉到页外"——截图上页是完整的，只有按下去
  * 才发现那枚键点不动。
  *
@@ -79,7 +80,7 @@ public class CampaignLayoutTest {
         int sum = CampaignLayout.TOP + listBand + CampaignLayout.GROUP_GAP
                 + CampaignLayout.VIEWPORT_H + CampaignLayout.GROUP_GAP + CampaignLayout.CELL_H
                 + CampaignLayout.GROUP_GAP + CampaignLayout.CELL_H;
-        assertEquals(6 + 118 + 4 + 90 + 4 + 45 + 4 + 45, sum);
+        assertEquals(6 + 118 + 4 + 80 + 4 + 45 + 4 + 45, sum);
         assertEquals(sum, CampaignLayout.PAGE_H);
         assertTrue("最矮画布装不下整页：" + CampaignLayout.PAGE_H + " > " + Screen.LOGIC_H_MIN,
                 CampaignLayout.PAGE_H <= Screen.LOGIC_H_MIN);
@@ -94,32 +95,66 @@ public class CampaignLayoutTest {
         assertEquals(CampaignLayout.LIST_BOTTOM, CampaignLayout.BRIEF_TOP - CampaignLayout.GROUP_GAP);
     }
 
-    /** 视口是 9 行整：上限那一稿（首行＋两空行＋背景 3＋目标 3）填满它，也正好滚不动。 */
+    /**
+     * 视口是 <b>8 行整</b>（80）：现文案那一稿（首行＋两空行＋背景 3＋目标 2）正好装满，一行不溢。
+     *
+     * <p>取整数倍行距是为了消掉"最后一行只露 4px 字身"那半行（{@link BriefingLayoutTest} 里 84
+     * 那一形留着的东西）。装满那一档拇指＝行程（钳位一），行程自己过可点下界——轨照旧画着，但拖不出新内容。
+     */
     @Test
-    public void viewportIsExactlyNineWholeRows() {
-        assertEquals(9 * BriefingLayout.LINE_STEP, CampaignLayout.VIEWPORT_H);
-        assertEquals(90, CampaignLayout.VIEWPORT_H);
+    public void viewportIsExactlyEightWholeRows() {
+        assertEquals(8 * BriefingLayout.LINE_STEP, CampaignLayout.VIEWPORT_H);
+        assertEquals(80, CampaignLayout.VIEWPORT_H);
         CampaignLayout.briefRect(r);
         assertEquals(CampaignLayout.VIEWPORT_H, r.height());
         assertEquals(CampaignLayout.BRIEF_BOTTOM, r.bottom);
 
-        String[] cap = new String[9];
-        Arrays.fill(cap, "字");
-        int contentH = BriefingLayout.contentHeight(cap, PER_CHAR);
+        String[] full = new String[8];
+        Arrays.fill(full, "字");
+        int contentH = BriefingLayout.contentHeight(full, PER_CHAR);
         assertEquals(CampaignLayout.VIEWPORT_H, contentH);
         assertEquals(0, ScrollLayout.maxOffset(CampaignLayout.VIEWPORT_H, contentH));
         // 不溢出那一档拇指等于行程（钳位一）；行程自己过可点下界
         assertEquals(ScrollLayout.travel(CampaignLayout.VIEWPORT_H),
                 ScrollLayout.thumb(CampaignLayout.VIEWPORT_H, contentH));
+        assertEquals(62, ScrollLayout.travel(CampaignLayout.VIEWPORT_H));
         assertTrue(ScrollLayout.travel(CampaignLayout.VIEWPORT_H) >= ScrollLayout.MIN_THUMB);
+    }
+
+    /**
+     * 他给的上限用满（背景 3＋目标 3＝9 行 90 格）对 80 的视口<b>溢出 10px</b>——这一条是
+     * 「上限在代码里校验，但是为了是否出现滚动条而校验」（他 2026-10-12 逐字）那道校验的<b>第二个答案</b>：
+     * 视口若取 90，上限那一档也装得下，那道校验就永远只能回答"否"，等于没校验。
+     *
+     * <p>这一档拇指缩到 43、矮过可点下界 45，<b>不再是门槛</b>：拖的落点本来就是整个视口
+     * （{@link ScrollLayout#offsetForDrag}，他 2026-10-13 裁的甲），拇指单抓抓不住也拖得满程。
+     */
+    @Test
+    public void capBriefingOverflowsByTenPixels() {
+        String[] cap = new String[9];
+        Arrays.fill(cap, "字");
+        int contentH = BriefingLayout.contentHeight(cap, PER_CHAR);
+        assertEquals(90, contentH);
+        assertEquals(10, ScrollLayout.maxOffset(CampaignLayout.VIEWPORT_H, contentH));
+
+        assertEquals(43, ScrollLayout.thumb(CampaignLayout.VIEWPORT_H, contentH));
+        assertFalse("这一档拇指单抓抓不住（有意，理由见方法注释）",
+                ScrollLayout.thumbTouchable(CampaignLayout.VIEWPORT_H, contentH));
+        assertEquals("按着视口上拖 10px 就把这一档拖满", 10,
+                ScrollLayout.offsetForDrag(CampaignLayout.VIEWPORT_H, contentH, 0, -10));
+        // 拖满那一格拇指底边正好吻上下箭头顶（视口内相对坐标，轨的算术不吃 BRIEF_TOP）
+        ScrollLayout.thumbRect(BriefingLayout.TRACK_LEFT, CampaignLayout.VIEWPORT_H, contentH, 10, r);
+        assertEquals(CampaignLayout.VIEWPORT_H - ScrollLayout.ARROW_H, r.bottom);
+        assertEquals(ScrollLayout.TRACK_W, r.width());
     }
 
     /**
      * 现文案八份简报，每一份在<b>最坏度量</b>（每码位 8px）下都不出轨 ⇒ 这一屏今天拖不动。
      *
-     * <p>这条钉的是"轨常驻而内容为 8 行"这一<b>现状</b>，不是永久规则：他 10-12 的上限（背景 3 行／
-     * 目标 3 条）用满是 9 行 = 90，正好等于视口。有人把上限改宽或把句子写长时这条会红，红的读法是
-     * "文案开始溢出了，回来看视口要不要长"，不是"折行坏了"。
+     * <p>这条钉的是"轨常驻而内容为 8 行"这一<b>现状</b>，不是永久规则：8 行 = 80 正好等于视口，
+     * 一句加长或折出一行就越界（越界是<b>对的</b>——那时该由轨来滚，见
+     * {@link #capBriefingOverflowsByTenPixels}）。所以它红掉的读法是"文案开始溢出了，轨今天真的有活干"，
+     * 不是"版面坏了"；上限那一档溢出是他 10-12 逐字要的第二个答案。
      */
     @Test
     public void everyCurrentBriefingFitsTheViewport() {

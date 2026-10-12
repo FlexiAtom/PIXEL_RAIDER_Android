@@ -37,7 +37,10 @@ public class BriefingLayoutTest {
     private static final TextWrap.Width PER_CHAR =
             text -> 8 * text.codePointCount(0, text.length());
 
-    /** 保守预算解出来的视口高（列表 120 + 难度 59 + 键行 45 + 三条形间距 12 之后剩的那一截）。 */
+    /**
+     * 本文件的算术 fixture（<b>非</b>整数倍行距那一形，用来看"最后一行只露半截"怎么处理）。
+     * 战役选关页那一格今天取 80（整数倍行距、无半行），由 {@link CampaignLayoutTest} 钉。
+     */
     private static final int VIEWPORT_H = 84;
     /** 上限用满的那一稿：首行 1 + 空 1 + 背景 3 + 空 1 + 目标 3。当前文案只写到目标 2 行。 */
     private static final int FULL_ROWS = 9;
@@ -82,9 +85,9 @@ public class BriefingLayoutTest {
         assertEquals(30, BriefingLayout.contentHeight(new String[]{han(10), han(10), han(10)}, PER_CHAR));
     }
 
-    /** 满装九行＝90px，84 的视口溢出 6px——轨存在的唯一理由就是这 6px。 */
+    /** 满装九行＝90px，对 84 这一档视口溢出 6px（页面那一格是 80 ⇒ 溢 10px，见 {@link CampaignLayoutTest}）。 */
     @Test
-    public void fullBriefingOverflowsBySixPixelsOnly() {
+    public void fullBriefingOverflowsTheFixtureViewportBySixPixels() {
         int contentH = BriefingLayout.contentHeight(fullRows(), PER_CHAR);
         assertEquals(90, contentH);
         assertEquals(6, ScrollLayout.maxOffset(VIEWPORT_H, contentH));
@@ -118,7 +121,11 @@ public class BriefingLayoutTest {
      * 视口取行距整数倍（80）时半行不再出现；它原本的代价是"拇指缩到 43、低于可点下界 45"，
      * 而这一格已被他 2026-10-13 逐字「我的建议是允许按着视口区域拖动」作废——拖的落点是整个视口，
      * 拇指单抓抓不住不再决定拖不拖得动。⇒ <b>80 那一形没有代价了</b>，84 那形仍留着半行。
-     * 取 80 是<b>我</b>读他这句读出来的（他没写数），3-B 落地前可推翻。
+     *
+     * <p>80 是<b>我</b>从他「上限在代码里校验，但是为了是否出现滚动条而校验」那句读出来的（他没写数）。
+     * 批3-B 已按 80 落地（{@link CampaignLayoutTest#capBriefingOverflowsByTenPixels} 钉住"上限溢 10px"
+     * 那个第二个答案），这条因此从"待推翻的读法"降成<b>两组数的对照</b>：84 的拇指仍可点、80 的拇指不可单抓
+     * 而拖得动。
      */
     @Test
     public void rowPitchViewportCostsThumbTouchability() {

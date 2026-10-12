@@ -34,7 +34,11 @@ import org.junit.Test;
  */
 public class ScrollLayoutTest {
 
-    /** 保守口径的简报视口（键行按命中 45 那一档从 320 画布里剩下的数）。 */
+    /**
+     * 本文件的算术 fixture，<b>不是</b>战役选关页那一格（页面今天取 80，由 {@link CampaignLayoutTest} 钉）。
+     * 挑 84 是因为这一档拇指 48 ≥ 可点下界，能把"拇指抓得住"那一族换算走完；80 那一档在
+     * {@link #draggingInsideTheViewportFollowsTheFinger} 与 {@code CampaignLayoutTest} 里各有覆盖。
+     */
     private static final int V = 84;
     /** 满装内容高：首行 1 + 背景 ≤3 + 目标 ≤3，按 8px 字 + 2px 行距 = 每行步进 10。 */
     private static final int C_FULL = 90;
