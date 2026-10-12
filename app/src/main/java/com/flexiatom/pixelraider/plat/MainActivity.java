@@ -91,8 +91,10 @@ public final class MainActivity extends ComponentActivity {
         // 内嵌像素中文要在第一块贴图烘出来之前装上（BAKE 是静态笔，装晚了一部分文本会用系统字烘）。
         // 和落盘出口同一条边界：渲染线程拿不到 Context，由 plat 在启动时注入。
         // 装失败必须出声：兜底态是"系统字 + 抗锯齿"，画面会整片变样，静默的话只会被当成"字体没生效"。
+        // 两档各有各的原生面，任一读不出来都按整套没装上处理（见 TextCache.installTypeface）。
         if (!TextCache.installTypeface(getAssets())) {
             android.util.Log.w("PixelRaider", "embedded CJK face unavailable: " + TextCache.ASSET
+                    + " / " + TextCache.ASSET_SMALL
                     + " - UI falls back to the system font (antialiased)");
         }
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);

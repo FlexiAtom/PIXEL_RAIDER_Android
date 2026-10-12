@@ -147,10 +147,14 @@ public final class Md3 {
 
     // ---- 字阶语义名 ----------------------------------------------------------------------------
     //
-    // **汉字只有 12 与 24 两档**，这是内嵌像素字体（{@code TextCache.GRID_PX}）定的物理上限：
-    // 像素字按非原生网格渲染会把等宽的像素格变成宽窄不均的糊边，所以四档 MD3 角色只能并到
-    // 两个真实字号上，层级改由**颜色**承担（MD3 本来就说颜色表达语义角色）。
+    // **这四档角色只落在 12 与 24 两个真实字号上**，物理上限由内嵌像素字体（{@code TextCache.GRID_PX}）
+    // 定：像素字按非原生网格渲染会把等宽的像素格变成宽窄不均的糊边，所以层级改由**颜色**承担
+    // （MD3 本来就说颜色表达语义角色）。
     // ASCII 数字不受这条约束——它走自绘点阵 {@code BitmapFont}，仍是 8/16。
+    //
+    // 2026-10-13 起字体是**双档原生面**，另有一张 8px 的脸（{@code TextCache.GRID_SMALL}），但**不进
+    // 这四档**：简报区那一屏的字身住在 {@code BriefingLayout.GLYPH_H}，它不是 MD3 的角色层级，
+    // 而是一整屏小字的版面量。哪天要有第二屏用它，再来这里起名分。
     public static final int PX_LABEL = 12;      // label-small / label-medium：卡片标题、次要说明
     public static final int PX_BODY = 12;       // body-large：按钮文字
     public static final int PX_TITLE = 24;      // headline-small：面板标题

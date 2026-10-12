@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.flexiatom.pixelraider.ui.BriefingLayout;
 import com.flexiatom.pixelraider.ui.HudLayout;
 import com.flexiatom.pixelraider.ui.Md3;
 
@@ -40,10 +41,19 @@ import static org.junit.Assert.assertTrue;
 /**
  * 内嵌中文字体的**词表覆盖**（2026-09-24「只中文用字体」决策的地基）。
  *
- * <p>像素中文只能按原生 12px 网格渲染，缺一个字就掉回系统字——那一格的像素味当场断裂，
+ * <p>像素中文只能按原生网格渲染，缺一个字就掉回系统字——那一格的像素味当场断裂，
  * 而且断在玩家最容易看到的地方（"击杀"的"杀"、状态名"狂热"的"热"、Boss 名"毁灭者"的"毁"）。
  * 字库升级、文案新增、换 region 变体都可能悄悄把覆盖打掉，所以这条查**真实字面量**：
  * 扫 {@code src/main/java} 全部字符串字面量（先剥注释），凡是非 ASCII 的字符，资产里必须有。
+ *
+ * <p><b>2026-10-13 起这里是逐档核对的</b>（字体成了两档原生面，见 {@code TextCache}）：简报文案那一个
+ * 文件的字面量查 8px 那张脸，其余一切查 12px 那张子集。合起来查（并集）等于没查——12px 那份为正式版
+ * 切回小词表的那天，简报缺字会一个字都不报，而它正是<b>唯一</b>会缺字的那一屏：这批文案是新写的，
+ * 切子集时按老词表切。犯过的实例：2026-10-13 简报八张稿落码后全量跑才报出 10 处缺字
+ * （军 招 练 熟 望 挨 睛 利 扛——「————军事行动: 」的"军"在内），而单跑简报那三个测试类全绿。
+ *
+ * <p>分档判据是**文件名**，不是"这段文案按哪档画"——静态扫不到那个数。它的失效方向是安全的：
+ * 把 8px 的字面量抄进别的文件，它会当场受 12px 那道闸检查，缺字就报（今天那九个字正是这么报的）。
  *
  * <p>为什么自己解析 sfnt：AGP 把单测的 bootclasspath 换成 android.jar，那里没有
  * {@code java.awt.Font}——想读 cmap 只剩两条路，要么引第三方字体库（规格 §零 只准两个 AndroidX
@@ -54,16 +64,23 @@ import static org.junit.Assert.assertTrue;
  */
 public final class EmbeddedFontTest {
 
-    private static final String ASSET = "fonts/pr-cjk-12px.otf";
+    /** 资产路径与运行时读的那两个常量同源（编译期常量，javac 内联，不触发 {@code TextCache} 初始化）。 */
+    private static final String ASSET = TextCache.ASSET;
+    private static final String ASSET_SMALL = TextCache.ASSET_SMALL;
+    /** 简报文案：全仓唯一按 8px 档上屏的字面量住的地方。 */
+    private static final String SMALL_FACE_FILE = "CampaignBriefing.java";
     private static final Pattern LITERAL = Pattern.compile("\"((?:[^\"\\\\\\n]|\\\\.)*)\"");
 
     @Test
-    public void everyNonAsciiLiteralIsInkedByTheEmbeddedFace() throws Exception {
-        Sfnt face = loadFace();
+    public void everyNonAsciiLiteralIsInkedByItsOwnFace() throws Exception {
+        Sfnt large = loadFace(ASSET);
+        Sfnt small = loadFace(ASSET_SMALL);
         List<String> missing = new ArrayList<>();
-        int checked = 0;
+        int checked = 0, checkedLarge = 0, checkedSmall = 0;
         for (Path f : Files.walk(moduleDir().resolve("src/main/java"))
                 .filter(Files::isRegularFile).toList()) {
+            boolean smallFace = f.getFileName().toString().equals(SMALL_FACE_FILE);
+            Sfnt face = smallFace ? small : large;
             String src = new String(Files.readAllBytes(f), StandardCharsets.UTF_8);
             Matcher m = LITERAL.matcher(stripComments(src));
             while (m.find()) {
@@ -72,9 +89,11 @@ public final class EmbeddedFontTest {
                     char ch = lit.charAt(i);
                     if (ch < 0x80) continue;
                     checked++;
+                    if (smallFace) checkedSmall++; else checkedLarge++;
                     if (!face.hasGlyphFor(ch)) {
                         missing.add(ch + "(U+" + Integer.toHexString(ch) + ") @ "
-                                + f.getFileName() + " 「" + lit + "」");
+                                + f.getFileName() + " 「" + lit + "」 需 "
+                                + (smallFace ? TextCache.GRID_SMALL : TextCache.GRID_PX) + "px 档");
                     }
                 }
             }
@@ -88,7 +107,12 @@ public final class EmbeddedFontTest {
         // checked，不是注释里的任何一个读数——所以这里只留量级，别再把某个总数抄成事实。
         // 阈值取 150：留得住"改文案减字"，也拦得住"正则不再匹配"。
         assertTrue("扫到 " + checked + " 个非 ASCII 字面量字符，太少说明提取失效", checked > 150);
-        assertTrue("ASCII 也必须在（等宽像素字里半格），'A' 缺了说明子集切错", face.hasGlyphFor('A'));
+        // 逐档各挡一次空转：分档路由若坏成"全查一张脸"，上面那条仍会绿，而另一档从此一字不查。
+        assertTrue("查到 12px 档的字符只有 " + checkedLarge + " 个，路由或正则失效", checkedLarge > 150);
+        assertTrue("查到 8px 档（简报文案）的字符只有 " + checkedSmall
+                + " 个，说明简报稿不住 " + SMALL_FACE_FILE + " 了——分档判据得跟着换", checkedSmall > 20);
+        assertTrue("ASCII 也必须在（等宽像素字里半格），'A' 缺了说明子集切错", large.hasGlyphFor('A'));
+        assertTrue("8px 档同理要含 ASCII", small.hasGlyphFor('A'));
     }
 
     /**
@@ -98,7 +122,7 @@ public final class EmbeddedFontTest {
      */
     @Test
     public void bakedLineHeightMatchesTheLabelSlotItIsLaidInto() throws Exception {
-        Sfnt face = loadFace();
+        Sfnt face = loadFace(ASSET);
         int line = face.lineHeightPx(Md3.PX_LABEL);
         assertTrue("行高 " + line + " 与 PX_LABEL=" + Md3.PX_LABEL
                         + " / LABEL_H=" + HudLayout.LABEL_H + " 不是一套网格",
@@ -108,30 +132,55 @@ public final class EmbeddedFontTest {
     /** 汉字整格、ASCII 半格——LABEL_W 是按"两个汉字"算的，宽度规则变了就得重排。 */
     @Test
     public void cjkAdvancesAreFullGridAndAsciiIsHalf() throws Exception {
-        Sfnt face = loadFace();
+        Sfnt face = loadFace(ASSET);
         assertTrue(face.advancePx('国', Md3.PX_LABEL) == Md3.PX_LABEL);
         assertTrue(face.advancePx('A', Md3.PX_LABEL) == Md3.PX_LABEL / 2);
     }
 
-    private static Sfnt loadFace() throws IOException {
-        Path otf = moduleDir().resolve("src/main/assets/" + ASSET);
-        return new Sfnt(Files.readAllBytes(otf));
+    /**
+     * 8px 那张脸必须是**原生** 8px，不是 12px 缩出来的：行高 8、汉字整格、ASCII 半格。
+     *
+     * <p>简报那套版面数全建在这三个数上——{@code BriefingLayout.LINE_STEP = GLYPH_H + 2} 的"字身 8"、
+     * 折行宽 210 容 26 字。缩放出来的 8px 会把这些关系变成"约等于"（他 2026-10-12 否掉缩放档的理由）。
+     * 最后那一条同时钉住"简报字身 = 小档网格"：两张脸各自的档位与两处版面量不许各自漂。
+     *
+     * <p>{@code TextCache.snapToGrid}（请求值 → 档位）在这里查不了：调它的方法会触发 {@code TextCache}
+     * 初始化，而 {@code BAKE} 是 {@code android.graphics.Paint}，AGP 的 mockable android.jar 里
+     * 构造函数直接抛 {@code Stub!}。常量引用不受此害（javac 内联，不初始化类），所以上面读得到
+     * {@code TextCache.GRID_SMALL}。规格 §九.20 那条"版面是纯算术、能在 JVM 上跑"的边界止于此：
+     * 像素网格的**物理量**在这里查得，**吸附规则**只能在真机上看。
+     */
+    @Test
+    public void theSmallFaceIsNativeToItsOwnGrid() throws Exception {
+        Sfnt face = loadFace(ASSET_SMALL);
+        int px = TextCache.GRID_SMALL;
+        assertTrue("8px 档行高 " + face.lineHeightPx(px) + " ≠ " + px,
+                face.lineHeightPx(px) == px);
+        assertTrue("简报行距按字身 " + BriefingLayout.GLYPH_H + " 算，字库给的是另一档",
+                face.lineHeightPx(px) == BriefingLayout.GLYPH_H);
+        assertTrue(face.advancePx('国', px) == px);
+        assertTrue(face.advancePx('A', px) == px / 2);
+    }
+
+    private static Sfnt loadFace(String asset) throws IOException {
+        return new Sfnt(Files.readAllBytes(moduleDir().resolve("src/main/assets/" + asset)));
     }
 
     /**
      * 字体与源码都按文件读，不走 classpath：AGP 只把 {@code src/test/resources} 挂成 JVM
      * 测试的 java-resource 根，{@code assets/} 不在里面（那是 APK 打包的东西）。
      * 至于从哪一层起算，AGP 版本间 {@code user.dir} 时而是模块目录、时而是仓根，
-     * 所以向上找"这一层有那个 .otf"而不是猜——顺带把源码扫描的根也钉在同一处。
+     * 所以向上找"这一层有那两枚 .otf"而不是猜——顺带把源码扫描的根也钉在同一处。
      */
     private static Path moduleDir() {
         for (Path p = Paths.get("").toAbsolutePath(); p != null; p = p.getParent()) {
             for (Path cand : new Path[]{p, p.resolve("app")}) {
-                if (Files.isRegularFile(cand.resolve("src/main/assets/" + ASSET))) return cand;
+                if (Files.isRegularFile(cand.resolve("src/main/assets/" + ASSET))
+                        && Files.isRegularFile(cand.resolve("src/main/assets/" + ASSET_SMALL))) return cand;
             }
         }
-        throw new IllegalStateException("找不到内嵌字体 " + ASSET + "，起始目录 "
-                + Paths.get("").toAbsolutePath());
+        throw new IllegalStateException("找不到内嵌字体 " + ASSET + " 或 " + ASSET_SMALL
+                + "，起始目录 " + Paths.get("").toAbsolutePath());
     }
 
     /**

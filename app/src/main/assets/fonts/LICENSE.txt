@@ -1,8 +1,18 @@
-本游戏内嵌的中文字体：Fusion Pixel 12px Mono（子集化）
+本游戏内嵌的中文字体：Fusion Pixel Mono 两档原生面（上游同一家、同一发行号）
 来源：https://github.com/TakWolf/fusion-pixel-font  作者 TakWolf
-上游版本：Fusion Pixel 12px Mono zh_hans 2026.09.25（发行号 v2026.09.25）
-本仓库内的副本只保留游戏文案用到的码位（1560 个字形 / 184KB），未改动任何字形设计。
-字集由 app/src/test/java/com/flexiatom/pixelraider/gfx/EmbeddedFontTest 的真读闸门兜底。
+
+  fonts/pr-cjk-12px.otf —— Fusion Pixel 12px Mono（子集化）
+    上游版本：Fusion Pixel 12px Mono zh_hans 2026.09.25（发行号 v2026.09.25）
+    本仓库内的副本只保留游戏文案用到的码位（1560 个字形 / 184KB），未改动任何字形设计。
+
+  fonts/pr-cjk-8px.otf —— Fusion Pixel 8px Mono（zh_hans，**未子集化**，上游原样全集）
+    上游版本：Fusion Pixel 8px Mono zh_hans 2026.09.25（同一发行号，与上面那只 zip 同期取得）
+    副本与上游文件逐字节相同：2,496,760 B，SHA-256 5f3536b8c82d6bfd26e9b9bf1c9bd8c4aa1e083d3fd06d9008bc292518d7f79f
+    cmap 覆盖 28,409 个码位，未改动任何字形设计。
+    debug 期按全集内嵌（裁量原文「我建议在debug阶段舍弃切字，选择全集」），正式版切回子集。
+
+两档各自的上屏字面量由 app/src/test/java/com/flexiatom/pixelraider/gfx/EmbeddedFontTest
+按文件逐档真读核对——合起来查并集等于没查。
 该字体本身缝合了下列字库，三份授权原文一并随附如下。
 
 ================================================================

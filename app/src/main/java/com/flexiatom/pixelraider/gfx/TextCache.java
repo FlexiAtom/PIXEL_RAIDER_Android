@@ -41,16 +41,30 @@ import android.graphics.Typeface;
  *   <li>像素三禁的边界照旧——战场与 HUD 精灵仍不许 AA。</li>
  * </ul>
  *
+ * <p>2026-10-13 加成**双档原生面**（他逐字「我建议甲，因为缩放后的结果并不确定」）：简报那一屏要 8px
+ * 字身，而把 12px 的脸缩到 8 就是"缩放后的结果不确定"那一格——所以进来的是第二张脸
+ * （{@link #ASSET_SMALL}，原生网格 8px），不是把第一张缩小。三件事的口径随之改一处：
+ * 字号准取<b>两档</b>网格——8，或 12 的整数倍。取哪张脸由吸附后的尺寸唯一决定，见 {@link #faceOf}。
+ *
  * <p>探测时逐项比对 text/size/color，不靠哈希相等判定：hashCode 撞车的后果是"菜单标题画成
  * 上一局的分数"，比崩更难查。
  */
 public final class TextCache {
 
-    /** 内嵌字体的资产名。子集化的词表覆盖由 {@code EmbeddedFontTest} 钉住。 */
+    /** 内嵌字体的资产名（12px 档）。子集化的词表覆盖由 {@code EmbeddedFontTest} 钉住。 */
     public static final String ASSET = "fonts/pr-cjk-12px.otf";
+    /** 简报档的资产名（原生网格 8px）。词表覆盖由 {@code EmbeddedFontTest} 按文件逐档核对。 */
+    public static final String ASSET_SMALL = "fonts/pr-cjk-8px.otf";
 
-    /** 内嵌像素中文的原生网格（逻辑 px）。字号只能是它的整数倍。 */
+    /** 内嵌像素中文的大档原生网格（逻辑 px）。这一档的字号只能是它的整数倍。 */
     public static final int GRID_PX = 12;
+    /** 小档原生网格：简报那一屏的字身，另有其**原生面**（不是把 {@link #GRID_PX} 那张缩小）。 */
+    public static final int GRID_SMALL = 8;
+    /**
+     * 请求值归哪一档的分界。8 与 12 的中点是 10，取"往下靠"：要 10 格的地方给 8 档，
+     * 于是缩的是读数、不是像素网格—— {@link #snapToGrid} 那句"宁可改读数也不让它糊"就是这个意思。
+     */
+    private static final int SMALL_MAX = 10;
 
     private static final int CAP = 512;          // 2 的幂
     /** 槽位状态。线性探测删中间一格必须留墓碑，见 {@link #DEAD}。 */
@@ -65,9 +79,23 @@ public final class TextCache {
     private int clock;
     private int size;
 
+    private static Typeface faceLarge, faceSmall;
+
+    /**
+     * 尺寸 → 原生面。吸附后的取值只有两类：8，或 12 的正整数倍（12 / 24 / 36…），所以这个判据是
+     * 完备的——不存在"落在两档之间"的那一格，也就不会有两张脸抢同一个键。
+     *
+     * <p>未装上时两个都是 null，{@code Paint.setTypeface(null)} 即回落系统默认字（兜底态的原样）。
+     */
+    private static Typeface faceOf(int px) {
+        return px == GRID_SMALL ? faceSmall : faceLarge;
+    }
+
     private static final Paint BAKE = new Paint();
     static {
         // 默认（未装字体 = 系统字的兜底态）才开 AA：8px 系统汉字不开 AA 根本读不出来。
+        // 两档各自的 Typeface 不在这里定，每次落笔前按尺寸换（{@link #faceOf}）——一张 BAKE 跑两档，
+        // 槽里存的 px 就是选脸的依据，不必为档位再造一座缓存。
         BAKE.setAntiAlias(true);
     }
 
@@ -75,14 +103,20 @@ public final class TextCache {
      * 装上内嵌像素中文。只有启动时一次，走 plat 注入（渲染线程拿不到 Context，规格 §八 的边界）。
      *
      * <p>装上之后关掉 AA 与亚像素定位：贴图要按整数倍放大，任何亚像素偏移都会在放大后变成
-     * 一格宽窄不均的糊边。
+     * 一格宽窄不均的糊边。这里不给 {@code BAKE} 定脸——两档各有各的原生面，落笔前按尺寸换
+     * （{@link #faceOf}），启动时先设一张反而会让"谁忘了换"变成一条静默的错。
+     *
+     * <p>两张脸**都**读出来才算装上：一半像素中文、一半系统字的画面，比整套回落更难读。
+     * 任一失败都不动已装的字段，兜底态（系统字 + AA）保持完整。
      *
      * @return false = 资产读不出来，继续用系统字（画面会变样，但不该因此起不来）
      */
     public static boolean installTypeface(AssetManager assets) {
         try {
-            Typeface face = Typeface.createFromAsset(assets, ASSET);
-            BAKE.setTypeface(face);
+            Typeface large = Typeface.createFromAsset(assets, ASSET);
+            Typeface small = Typeface.createFromAsset(assets, ASSET_SMALL);
+            faceLarge = large;
+            faceSmall = small;
             BAKE.setAntiAlias(false);
             BAKE.setSubpixelText(false);
             BAKE.setLinearText(false);
@@ -92,8 +126,9 @@ public final class TextCache {
         }
     }
 
-    /** 字号向 12 的整数倍靠：像素网格之外的尺寸画不得，宁可改读数也不让它糊。 */
+    /** 字号只准落在两档原生网格上：≤10 归 8 档，其余向 12 的整数倍靠（12 / 24）。 */
     public static int snapToGrid(int px) {
+        if (px <= SMALL_MAX) return GRID_SMALL;
         int steps = Math.max(1, Math.round((float) px / GRID_PX));
         return steps * GRID_PX;
     }
@@ -161,6 +196,7 @@ public final class TextCache {
     }
 
     private static int ascentOf(int px) {
+        BAKE.setTypeface(faceOf(px));
         BAKE.setTextSize(px);
         Paint.FontMetrics fm = FFM;
         BAKE.getFontMetrics(fm);
@@ -168,6 +204,7 @@ public final class TextCache {
     }
 
     private Bitmap render(String text, int px, int color) {
+        BAKE.setTypeface(faceOf(px));
         BAKE.setTextSize(px);
         BAKE.setColor(Color.argb(255, Color.red(color), Color.green(color), Color.blue(color)));
         Paint.FontMetrics fm = FFM;
